@@ -50,8 +50,8 @@ public class PlaywrightManager {
 
     // Playwright 浏览器缓存路径（项目根目录下的 .playwright 目录）
     private static final String DEFAULT_PLAYWRIGHT_CACHE_PATH = ".playwright/cache";
-    // Playwright SDK 路径（项目根目录下的 .playwright 目录）
-    private static final String DEFAULT_PLAYWRIGHT_SDK_PATH = ".playwright/sdk";
+    // Playwright driver 路径（项目根目录下的 .playwright 目录）
+    private static final String DEFAULT_PLAYWRIGHT_DRIVER_PATH = ".playwright/driver";
 
     // ==================== 静态变量 ====================
 
@@ -76,10 +76,9 @@ public class PlaywrightManager {
         // 设置 Playwright 浏览器缓存路径
         initializePlaywrightPaths();
 
-        // 检查并安装Playwright SDK和浏览器（如果需要）
+        // 检查并安装Playwright 浏览器（如果需要）
         if (!isSkipBrowserDownload()) {
             ensureBrowsersInstalled();
-            ensurePlaywrightSdkInstalled();
         } else {
             LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Skipping browser installation (playwright.skip.browser.download=true)");
         }
@@ -98,40 +97,41 @@ public class PlaywrightManager {
             LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] PLAYWRIGHT_BROWSERS_PATH already set to: {}", browsersPath);
         }
 
-        // 直接使用 FrameworkConfigManager 获取配置，如果未设置则使用默认值
-        String sdkDir = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_SDK_DIR);
-        if (sdkDir == null || sdkDir.trim().isEmpty()) {
-            sdkDir = DEFAULT_PLAYWRIGHT_SDK_PATH;
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Using default SDK path: {}", sdkDir);
-        } else {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Using SDK path from FrameworkConfigManager: {}", sdkDir);
+        // 获取 Driver 路径配置
+        String driverPath = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_DRIVER_PATH);
+        if (driverPath != null && !driverPath.trim().isEmpty()) {
+            System.setProperty("playwright.driver.path", driverPath);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Set PLAYWRIGHT_DRIVER_PATH to: {}", driverPath);
         }
 
-        // 设置 Playwright SDK 路径系统属性（让 Playwright 知道在哪里下载 SDK）
-        System.setProperty("PLAYWRIGHT_SDK_DIR", sdkDir);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Set PLAYWRIGHT_SDK_DIR system property: {}", sdkDir);
+        // 确保Driver已安装
+        ensurePlaywrightDriverInstalled();
+    }
 
-        // 确保目录存在
+    /**
+     * 确保目录存在
+     */
+    private static void ensureDirectoriesExist() {
+        String browsersPath = System.getProperty("PLAYWRIGHT_BROWSERS_PATH", DEFAULT_PLAYWRIGHT_CACHE_PATH);
+        String driverPath = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_DRIVER_PATH);
+
         try {
-            // SDK 目录是必须的（包含 Playwright 驱动程序）
-            Path sdkPath = Paths.get(sdkDir).toAbsolutePath();
-            if (!Files.exists(sdkPath)) {
-                Files.createDirectories(sdkPath);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Created playwright SDK directory: {}", sdkPath);
+            // Cache 目录
+            Path cachePath = Paths.get(browsersPath).toAbsolutePath();
+            if (!Files.exists(cachePath)) {
+                Files.createDirectories(cachePath);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Created playwright browsers cache directory: {}", cachePath);
             }
 
-            // Cache 目录仅在需要下载浏览器时创建
-            if (!isSkipBrowserDownload()) {
-                Path cachePath = Paths.get(browsersPath).toAbsolutePath();
-                if (!Files.exists(cachePath)) {
-                    Files.createDirectories(cachePath);
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Created playwright browsers cache directory: {}", cachePath);
-                }
-            } else {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Skipping cache directory creation (browser download disabled)");
+            // Driver 目录
+            Path driverPathObj = Paths.get(driverPath).toAbsolutePath();
+            if (!Files.exists(driverPathObj)) {
+                Files.createDirectories(driverPathObj);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Created playwright driver directory: {}", driverPathObj);
             }
+
         } catch (Exception e) {
-            logger.warn("[Static Init] Failed to initialize playwright paths", e);
+            logger.warn("[Static Init] Failed to initialize directories", e);
         }
     }
 
@@ -158,134 +158,38 @@ public class PlaywrightManager {
     // ==================== 临时目录清理方法 ====================
 
     /**
-     * 确保Playwright SDK已安装
+     * 确保Playwright Driver已安装
      */
-    private static void ensurePlaywrightSdkInstalled() {
-        String sdkDir = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_SDK_DIR);
+    private static void ensurePlaywrightDriverInstalled() {
+        String driverPath = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_DRIVER_PATH);
+
         try {
-            Path sdkPath = Paths.get(sdkDir).toAbsolutePath();
-            
-            // 强制检查和下载SDK，即使在使用系统浏览器时
-            boolean sdkInstalled = checkSdkInstalled(sdkPath);
-            if (!sdkInstalled) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright SDK not found in: {}, downloading...", sdkPath);
-                installPlaywrightSdk(sdkPath);
-            } else {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright SDK already installed in: {}", sdkPath);
+            Path driverPathObj = Paths.get(driverPath).toAbsolutePath();
+
+            // 检查Driver目录是否存在
+            if (!Files.exists(driverPathObj)) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Creating driver directory: {}", driverPathObj);
+                Files.createDirectories(driverPathObj);
             }
-            
+
+            // 检查Driver文件是否存在
+            boolean driverFilesExist = false;
+            try (Stream<Path> files = Files.list(driverPathObj)) {
+                driverFilesExist = files.anyMatch(file ->
+                        file.getFileName().toString().toLowerCase().contains("playwright"));
+            }
+
+            if (!driverFilesExist) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] No Playwright driver files found in: {}, will be downloaded if needed", driverPathObj);
+            } else {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright driver files found in: {}", driverPathObj);
+            }
+
             // 确保系统属性设置正确
-            System.setProperty("PLAYWRIGHT_SDK_DIR", sdkPath.toString());
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Set PLAYWRIGHT_SDK_DIR system property: {}", sdkPath);
+            System.setProperty("playwright.driver.path", driverPathObj.toString());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Set PLAYWRIGHT_DRIVER_PATH system property: {}", driverPathObj);
         } catch (Exception e) {
-            logger.warn("[Static Init] Failed to ensure Playwright SDK installation", e);
-        }
-    }
-
-    /**
-     * 检查Playwright SDK是否已安装
-     */
-    private static boolean checkSdkInstalled(Path sdkPath) {
-        try {
-            // 检查SDK目录是否存在且包含必要的文件
-            if (!Files.exists(sdkPath) || !Files.isDirectory(sdkPath)) {
-                return false;
-            }
-
-            // 检查是否包含playwright可执行文件或库文件
-            // 在Windows上可能是playwright.exe或playwright.dll
-            // 在其他系统上可能是playwright或libplaywright.so
-            boolean hasSdkFiles = false;
-            
-            try (Stream<Path> files = Files.list(sdkPath)) {
-                hasSdkFiles = files.anyMatch(file -> 
-                    file.getFileName().toString().toLowerCase().contains("playwright"));
-            }
-            
-            if (!hasSdkFiles) {
-                logger.warn("[Static Init] No Playwright SDK files found in directory: {}", sdkPath);
-            }
-            
-            return hasSdkFiles;
-        } catch (Exception e) {
-            logger.warn("[Static Init] Failed to check SDK installation", e);
-            return false;
-        }
-    }
-
-    /**
-     * 下载Playwright SDK到指定路径
-     */
-    private static void installPlaywrightSdk(Path sdkPath) {
-        try {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Downloading Playwright SDK to: {}", sdkPath);
-
-            // 确保目录存在
-            if (!Files.exists(sdkPath)) {
-                Files.createDirectories(sdkPath);
-            }
-
-            // 使用Playwright CLI下载SDK
-            ProcessBuilder pb = new ProcessBuilder(
-                    "java",
-                    "-cp", System.getProperty("java.class.path"),
-                    "com.microsoft.playwright.CLI",
-                    "install"
-            );
-
-            // 设置环境变量确保SDK下载到指定目录
-            Map<String, String> env = pb.environment();
-            env.put("PLAYWRIGHT_SDK_DIR", sdkPath.toString());
-            env.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1"); // 只下载SDK，不下载浏览器
-
-            // 添加详细日志输出以便调试
-            pb.redirectErrorStream(true);
-            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Starting Playwright SDK download process...");
-            Process process = pb.start();
-
-            // 等待进程完成
-            int exitCode = process.waitFor();
-            
-            if (exitCode == 0) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright SDK downloaded successfully!");
-                // 验证下载的文件
-                verifySdkInstallation(sdkPath);
-            } else {
-                logger.warn("[Static Init] Playwright SDK download failed with exit code: {}", exitCode);
-                logger.warn("[Static Init] SDK will be downloaded on first use");
-            }
-        } catch (Exception e) {
-            logger.warn("[Static Init] Failed to download Playwright SDK: {}", e.getMessage());
-            logger.warn("[Static Init] SDK will be downloaded on first use");
-        }
-    }
-
-    /**
-     * 验证SDK安装是否成功
-     */
-    private static void verifySdkInstallation(Path sdkPath) {
-        try {
-            if (!Files.exists(sdkPath) || !Files.isDirectory(sdkPath)) {
-                logger.warn("[Static Init] SDK directory does not exist after download: {}", sdkPath);
-                return;
-            }
-
-            // 检查是否有SDK文件
-            boolean hasSdkFiles = false;
-            try (Stream<Path> files = Files.list(sdkPath)) {
-                hasSdkFiles = files.anyMatch(file -> 
-                    file.getFileName().toString().toLowerCase().contains("playwright"));
-            }
-
-            if (!hasSdkFiles) {
-                logger.warn("[Static Init] No Playwright SDK files found in directory: {}", sdkPath);
-            } else {
-                logger.info("[Static Init] SDK installation verified successfully in: {}", sdkPath);
-            }
-        } catch (Exception e) {
-            logger.warn("[Static Init] Failed to verify SDK installation: {}", e.getMessage());
+            logger.warn("[Static Init] Failed to ensure Playwright driver installation", e);
         }
     }
 
@@ -450,14 +354,14 @@ public class PlaywrightManager {
             boolean browserInstalled = false;
             try (Stream<Path> stream = Files.list(cachePath)) {
                 browserInstalled = stream
-                    .filter(Files::isDirectory)
-                    .anyMatch(p -> {
-                        String dirName = p.getFileName().toString();
-                        boolean isMatch = dirName.contains("ms-playwright-" + browserType) || 
-                                        dirName.contains(browserType + "-");
-                        logger.debug("[Static Init] Checking directory: {} -> match: {}", dirName, isMatch);
-                        return isMatch;
-                    });
+                        .filter(Files::isDirectory)
+                        .anyMatch(p -> {
+                            String dirName = p.getFileName().toString();
+                            boolean isMatch = dirName.contains("ms-playwright-" + browserType) ||
+                                    dirName.contains(browserType + "-");
+                            logger.debug("[Static Init] Checking directory: {} -> match: {}", dirName, isMatch);
+                            return isMatch;
+                        });
             }
 
             LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Browser {} installed: {}", browserType, browserInstalled);
@@ -701,15 +605,15 @@ public class PlaywrightManager {
                 logger.info("Using system browser (channel: {}), skipping browser cache path", channel);
             }
 
-            String sdkPath = System.getProperty("PLAYWRIGHT_SDK_DIR", DEFAULT_PLAYWRIGHT_SDK_PATH);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Using Playwright SDK path: {}", sdkPath);
+            String driverPath = System.getProperty("PLAYWRIGHT_DRIVER_PATH", DEFAULT_PLAYWRIGHT_DRIVER_PATH);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using Playwright driver path: {}", driverPath);
 
             if (!useChannel) {
                 Path absoluteBrowsersPath = Paths.get(browsersPath).toAbsolutePath();
                 LoggingConfigUtil.logInfoIfVerbose(logger, "Absolute Playwright browsers path: {}", absoluteBrowsersPath);
             }
-            Path absoluteSdkPath = Paths.get(sdkPath).toAbsolutePath();
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Absolute Playwright SDK path: {}", absoluteSdkPath);
+            Path absoluteDriverPath = Paths.get(driverPath).toAbsolutePath();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Absolute Playwright driver path: {}", absoluteDriverPath);
 
             Playwright playwright = Playwright.create();
             playwrightInstances.put(configId, playwright);

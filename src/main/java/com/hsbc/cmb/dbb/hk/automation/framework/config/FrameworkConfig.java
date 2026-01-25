@@ -575,6 +575,16 @@ public enum FrameworkConfig {
     // ==================== Playwright SDK 配置 ====================
 
     /**
+     * Playwright Driver 路径
+     * 指定 Playwright Driver 的存储目录
+     */
+    PLAYWRIGHT_DRIVER_PATH(
+        "playwright.driver.path",
+        ".playwright/driver",
+        "Playwright Driver 路径"
+    ),
+    
+    /**
      * Playwright SDK 目录
      * 指定 Playwright SDK 的存储目录
      */
