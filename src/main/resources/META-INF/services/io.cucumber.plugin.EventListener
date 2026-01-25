@@ -1,0 +1,3 @@
+# Cucumber Event Listeners
+# PlaywrightListener - Playwright + Serenity 集成监听器，包含重试检查逻辑
+com.hsbc.cmb.dbb.hk.automation.framework.integration.listener.PlaywrightListener

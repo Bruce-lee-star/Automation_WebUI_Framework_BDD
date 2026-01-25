@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 控制台输出 -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Root logger -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- 项目日志级别 -->
+    <logger name="com.hsbc.cmb.dbb.hk.automation" level="DEBUG"/>
+    
+    <!-- Playwright 日志级别 -->
+    <logger name="com.microsoft.playwright" level="WARN"/>
+    
+    <!-- Serenity 日志级别 -->
+    <logger name="net.serenitybdd" level="INFO"/>
+    <logger name="net.thucydides" level="INFO"/>
+    
+    <!-- Cucumber 日志级别 -->
+    <logger name="io.cucumber" level="INFO"/>
+</configuration>
