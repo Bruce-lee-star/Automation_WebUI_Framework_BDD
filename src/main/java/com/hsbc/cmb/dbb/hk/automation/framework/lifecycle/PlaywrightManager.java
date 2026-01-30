@@ -27,6 +27,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -49,17 +50,15 @@ public class PlaywrightManager {
     private static final Logger logger = LoggerFactory.getLogger(PlaywrightManager.class);
 
     // Playwright 浏览器缓存路径（项目根目录下的 .playwright 目录）
-    private static final String DEFAULT_PLAYWRIGHT_CACHE_PATH = ".playwright/cache";
-    // Playwright driver 路径（项目根目录下的 .playwright 目录）
-    private static final String DEFAULT_PLAYWRIGHT_DRIVER_PATH = ".playwright/driver";
+    private static final String DEFAULT_PLAYWRIGHT_BROWSER_PATH = ".playwright/cache";
 
     // ==================== 静态变量 ====================
-
     // 线程安全的实例存储
     private static final ConcurrentMap<String, Playwright> playwrightInstances = new ConcurrentHashMap<>();
     private static final ConcurrentMap<String, Browser> browserInstances = new ConcurrentHashMap<>();
     private static final ThreadLocal<BrowserContext> contextThreadLocal = new ThreadLocal<>();
     private static final ThreadLocal<Page> pageThreadLocal = new ThreadLocal<>();
+    private static final List<Process> downloadProcesses = new ArrayList<>();
 
     // 配置标识
     private static String currentConfigId;
@@ -70,147 +69,95 @@ public class PlaywrightManager {
     // ==================== 静态初始化块 ====================
 
     static {
-        // 清理旧的 playwright-java 临时目录（防止 C 盘爆满）
-        cleanupOldPlaywrightTempDirs();
+        try {
+            // 【重要】尽早设置系统属性,确保 Playwright 使用正确的浏览器缓存路径
+            // 注意: Playwright Java 的 Driver/CLI 路径是硬编码的,必须提取到系统临时目录
+            // 无法通过配置修改到 .playwright/driver 目录
+            Path browsersPath = Paths.get(DEFAULT_PLAYWRIGHT_BROWSER_PATH).toAbsolutePath();
 
-        // 设置 Playwright 浏览器缓存路径
-        initializePlaywrightPaths();
+            System.setProperty("PLAYWRIGHT_BROWSERS_PATH", browsersPath.toString());
+            System.setProperty("PLAYWRIGHT_BROWSER_TYPE", FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_BROWSER_TYPE));
 
-        // 检查并安装Playwright 浏览器（如果需要）
-        if (!isSkipBrowserDownload()) {
-            ensureBrowsersInstalled();
-        } else {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Skipping browser installation (playwright.skip.browser.download=true)");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] PLAYWRIGHT_BROWSERS_PATH: {}", browsersPath);
+
+            // 设置 Serenity 环境变量
+            SystemEnvironmentVariables.currentEnvironmentVariables().setProperty("PLAYWRIGHT_BROWSERS_PATH", browsersPath.toString());
+
+            // 创建浏览器缓存目录
+            if (!Files.exists(browsersPath)) {
+                Files.createDirectories(browsersPath);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Created browsers path: {}", browsersPath);
+            }
+
+            // 清理旧的 playwright-java 临时目录（防止 C 盘爆满）
+            cleanupPlaywrightTempDirs();
+
+            // 检查并安装Playwright 浏览器（如果需要）
+            if (!isSkipBrowserDownload()) {
+                ensureBrowsersInstalled();
+            } else {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Skipping browser installation (playwright.skip.browser.download=true)");
+            }
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "[Static Init] Failed to initialize Playwright environment", e);
+            throw new RuntimeException("Failed to initialize Playwright environment during static initialization", e);
         }
     }
 
     /**
      * 初始化 Playwright 路径配置
+     * 已废弃: Playwright Java 的 Driver/CLI 路径是硬编码的，无法配置到 .playwright/driver 目录
      */
+    @Deprecated
     private static void initializePlaywrightPaths() {
-        String browsersPath = System.getProperty("PLAYWRIGHT_BROWSERS_PATH");
-        if (browsersPath == null || browsersPath.trim().isEmpty()) {
-            browsersPath = DEFAULT_PLAYWRIGHT_CACHE_PATH;
-            System.setProperty("PLAYWRIGHT_BROWSERS_PATH", browsersPath);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Set PLAYWRIGHT_BROWSERS_PATH to: {}", browsersPath);
-        } else {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] PLAYWRIGHT_BROWSERS_PATH already set to: {}", browsersPath);
-        }
-
-        // 获取 Driver 路径配置
-        String driverPath = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_DRIVER_PATH);
-        if (driverPath != null && !driverPath.trim().isEmpty()) {
-            System.setProperty("playwright.driver.path", driverPath);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Set PLAYWRIGHT_DRIVER_PATH to: {}", driverPath);
-        }
-
-        // 确保Driver已安装
-        ensurePlaywrightDriverInstalled();
-    }
-
-    /**
-     * 确保目录存在
-     */
-    private static void ensureDirectoriesExist() {
-        String browsersPath = System.getProperty("PLAYWRIGHT_BROWSERS_PATH", DEFAULT_PLAYWRIGHT_CACHE_PATH);
-        String driverPath = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_DRIVER_PATH);
-
-        try {
-            // Cache 目录
-            Path cachePath = Paths.get(browsersPath).toAbsolutePath();
-            if (!Files.exists(cachePath)) {
-                Files.createDirectories(cachePath);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Created playwright browsers cache directory: {}", cachePath);
-            }
-
-            // Driver 目录
-            Path driverPathObj = Paths.get(driverPath).toAbsolutePath();
-            if (!Files.exists(driverPathObj)) {
-                Files.createDirectories(driverPathObj);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Created playwright driver directory: {}", driverPathObj);
-            }
-
-        } catch (Exception e) {
-            logger.warn("[Static Init] Failed to initialize directories", e);
-        }
+        // 不再需要此方法，因为 Driver/CLI 路径是硬编码的
     }
 
     /**
      * 确保浏览器已安装
      */
     private static void ensureBrowsersInstalled() {
-        String browsersPath = System.getProperty("PLAYWRIGHT_BROWSERS_PATH");
         try {
-            Path cachePath = Paths.get(browsersPath).toAbsolutePath();
+            Path cachePath = Paths.get(DEFAULT_PLAYWRIGHT_BROWSER_PATH).toAbsolutePath();
+            String configuredBrowserType = getConfiguredBrowserType();
 
             boolean browsersInstalled = checkBrowsersInstalled(cachePath);
             if (!browsersInstalled) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Browsers not found in cache, downloading...");
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] {} browser not found in cache, downloading...", configuredBrowserType);
                 installBrowsers(cachePath);
             } else {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright browsers already installed in: {}", cachePath);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright {} browser already installed in: {}", configuredBrowserType, cachePath);
             }
         } catch (Exception e) {
-            logger.warn("[Static Init] Failed to check browsers installation", e);
-        }
-    }
-
-    // ==================== 临时目录清理方法 ====================
-
-    /**
-     * 确保Playwright Driver已安装
-     */
-    private static void ensurePlaywrightDriverInstalled() {
-        String driverPath = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_DRIVER_PATH);
-
-        try {
-            Path driverPathObj = Paths.get(driverPath).toAbsolutePath();
-
-            // 检查Driver目录是否存在
-            if (!Files.exists(driverPathObj)) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Creating driver directory: {}", driverPathObj);
-                Files.createDirectories(driverPathObj);
-            }
-
-            // 检查Driver文件是否存在
-            boolean driverFilesExist = false;
-            try (Stream<Path> files = Files.list(driverPathObj)) {
-                driverFilesExist = files.anyMatch(file ->
-                        file.getFileName().toString().toLowerCase().contains("playwright"));
-            }
-
-            if (!driverFilesExist) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] No Playwright driver files found in: {}, will be downloaded if needed", driverPathObj);
-            } else {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright driver files found in: {}", driverPathObj);
-            }
-
-            // 确保系统属性设置正确
-            System.setProperty("playwright.driver.path", driverPathObj.toString());
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Set PLAYWRIGHT_DRIVER_PATH system property: {}", driverPathObj);
-        } catch (Exception e) {
-            logger.warn("[Static Init] Failed to ensure Playwright driver installation", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Failed to check browsers installation", e);
         }
     }
 
     /**
-     * 清理旧的 playwright-java 临时目录
-     * 这些临时目录在 Windows 系统的 Temp 文件夹下积累会导致 C 盘爆满
+     * 清理旧的 playwright 临时目录
+     * 清理两个位置的临时目录:
+     * 1. 项目目录下的 .playwright/cache 中的 playwright-java-* 目录
+     * 2. 系统临时目录中的 playwright-artifacts-* 和 playwright-java-* 目录
      */
-    private static void cleanupOldPlaywrightTempDirs() {
-        try {
-            String tempDir = System.getProperty("java.io.tmpdir");
-            if (tempDir == null || tempDir.isEmpty()) {
-                logger.debug("Cannot get temp directory for cleanup");
-                return;
-            }
+    private static void cleanupPlaywrightTempDirs() {
+        // 清理项目目录中的临时目录
+        cleanupPlaywrightTempDirsInProject();
 
-            Path tempPath = Paths.get(tempDir);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Starting cleanup of old playwright-java temp directories in: {}", tempPath);
+        // 清理系统临时目录中的 playwright 临时目录
+        cleanupPlaywrightTempDirsInSystemTemp();
+    }
+
+    /**
+     * 清理项目目录中的 playwright-java-* 临时目录
+     */
+    private static void cleanupPlaywrightTempDirsInProject() {
+        try {
+            Path projectTempPath = Paths.get(DEFAULT_PLAYWRIGHT_BROWSER_PATH);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Starting cleanup of old playwright-java temp directories in project: {}", projectTempPath);
 
             // 查找所有 playwright-java-* 目录
             List<Path> playwrightTempDirs = new ArrayList<>();
-            try (Stream<Path> stream = Files.list(tempPath)) {
+            try (Stream<Path> stream = Files.list(projectTempPath)) {
                 stream.filter(path -> {
                             String fileName = path.getFileName().toString();
                             return fileName.startsWith("playwright-java-") && Files.isDirectory(path);
@@ -219,11 +166,11 @@ public class PlaywrightManager {
             }
 
             if (playwrightTempDirs.isEmpty()) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Found 0 playwright-java temp directories");
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Found 0 playwright-java temp directories in project");
                 return;
             }
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Found {} playwright-java temp directories", playwrightTempDirs.size());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Found {} playwright-java temp directories in project", playwrightTempDirs.size());
 
             int cleanedCount = 0;
             int failedCount = 0;
@@ -237,21 +184,94 @@ public class PlaywrightManager {
                     cleanedCount++;
                 } catch (Exception e) {
                     failedCount++;
-                    logger.debug("Failed to cleanup playwright temp dir: {} - {}", dir.getFileName(), e.getMessage());
+                    LoggingConfigUtil.logDebugIfVerbose(logger, "Failed to cleanup playwright temp dir: {} - {}", dir.getFileName(), e.getMessage());
                 }
             }
 
             // 只在有成功清理的目录时才输出详细信息
             if (cleanedCount > 0) {
                 long sizeMB = totalSize / (1024 * 1024);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Cleanup completed: {} directories removed ({} failed), total {} MB freed",
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Project cleanup completed: {} directories removed ({} failed), total {} MB freed",
                         cleanedCount, failedCount, sizeMB);
             } else if (failedCount > 0) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] All directories locked or inaccessible ({} failed), skipping cleanup", failedCount);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] All project directories locked or inaccessible ({} failed), skipping cleanup", failedCount);
             }
 
         } catch (Exception e) {
-            logger.warn("[Static Init] Failed to cleanup playwright temp directories: {}", e.getMessage());
+            LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Failed to cleanup playwright temp directories in project: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 清理系统临时目录中的 playwright 临时目录
+     * 包括 playwright-artifacts-* 和 playwright-java-* 目录
+     */
+    private static void cleanupPlaywrightTempDirsInSystemTemp() {
+        try {
+            // 获取系统临时目录
+            String tempDir = System.getProperty("java.io.tmpdir");
+            if (tempDir == null || tempDir.isEmpty()) {
+                LoggingConfigUtil.logDebugIfVerbose(logger, "[Static Init] System temp directory not available");
+                return;
+            }
+
+            Path systemTempPath = Paths.get(tempDir);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Starting cleanup of playwright temp directories in system temp: {}", systemTempPath);
+
+            // 查找所有 playwright-artifacts-* 和 playwright-java-* 目录
+            List<Path> playwrightTempDirs = new ArrayList<>();
+            try (Stream<Path> stream = Files.list(systemTempPath)) {
+                stream.filter(path -> {
+                            String fileName = path.getFileName().toString();
+                            boolean isPlaywright = fileName.startsWith("playwright");
+                            return isPlaywright && Files.isDirectory(path);
+                        })
+                        .forEach(playwrightTempDirs::add);
+            } catch (IOException e) {
+                LoggingConfigUtil.logDebugIfVerbose(logger, "[Static Init] Failed to list system temp directory: {}", e.getMessage());
+                return;
+            }
+
+            if (playwrightTempDirs.isEmpty()) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Found 0 playwright temp directories in system temp");
+                return;
+            }
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Found {} playwright temp directories in system temp", playwrightTempDirs.size());
+
+            int cleanedCount = 0;
+            int failedCount = 0;
+            long totalSize = 0;
+            for (Path dir : playwrightTempDirs) {
+                try {
+                    long size = calculateDirectorySize(dir);
+                    totalSize += size;
+
+                    deleteDirectoryRecursively(dir);
+                    cleanedCount++;
+                    // 使用 INFO 级别记录清理结果,即使不启用详细日志也能看到
+                    if (size > 0) {
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Cleaned: {} ({} MB)",
+                                dir.getFileName(), size / (1024 * 1024));
+                    }
+                } catch (Exception e) {
+                    failedCount++;
+                    LoggingConfigUtil.logDebugIfVerbose(logger, "Failed to cleanup playwright temp dir in system temp: {} - {}",
+                            dir.getFileName(), e.getMessage());
+                }
+            }
+
+            // 只在有成功清理的目录时才输出详细信息
+            if (cleanedCount > 0) {
+                long sizeMB = totalSize / (1024 * 1024);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] System temp cleanup completed: {} directories removed ({} failed), total {} MB freed",
+                        cleanedCount, failedCount, sizeMB);
+            } else if (failedCount > 0) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] All system temp directories locked or inaccessible ({} failed), skipping cleanup", failedCount);
+            }
+
+        } catch (Exception e) {
+            LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Failed to cleanup playwright temp directories in system temp: {}", e.getMessage());
         }
     }
 
@@ -273,9 +293,9 @@ public class PlaywrightManager {
                         String errorMsg = e.getMessage();
                         if (errorMsg != null && errorMsg.contains("AccessDeniedException")) {
                             // 对于文件锁定问题，使用DEBUG级别而不是WARN
-                            logger.debug("File locked, skipping deletion: {}", child.getFileName());
+                            LoggingConfigUtil.logDebugIfVerbose(logger, "File locked, skipping deletion: {}", child.getFileName());
                         } else {
-                            logger.warn("Failed to delete child path: {} - {}", child.getFileName(), errorMsg);
+                            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to delete child path: {} - {}", child.getFileName(), errorMsg);
                         }
                     }
                 });
@@ -287,9 +307,9 @@ public class PlaywrightManager {
             Files.deleteIfExists(path);
         } catch (AccessDeniedException e) {
             // 文件被锁定，这是预期行为（例如node.exe仍在运行）
-            logger.debug("File locked, cannot delete: {}", path.getFileName());
+            LoggingConfigUtil.logDebugIfVerbose(logger, "File locked, cannot delete: {}", path.getFileName());
         } catch (IOException e) {
-            logger.debug("Failed to delete path: {} - {}", path.getFileName(), e.getMessage());
+            LoggingConfigUtil.logDebugIfVerbose(logger, "Failed to delete path: {} - {}", path.getFileName(), e.getMessage());
         }
     }
 
@@ -329,9 +349,11 @@ public class PlaywrightManager {
      */
     private static String getConfiguredBrowserType() {
         try {
-            return getBrowserType();
+            String browserType = getBrowserType();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Configured browser type: {}", browserType);
+            return browserType;
         } catch (Exception e) {
-            logger.warn("[Static Init] Failed to get browser type config, using default: chromium", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Failed to get browser type config, using default: chromium", e);
             return "chromium";
         }
     }
@@ -358,8 +380,9 @@ public class PlaywrightManager {
                         .anyMatch(p -> {
                             String dirName = p.getFileName().toString();
                             boolean isMatch = dirName.contains("ms-playwright-" + browserType) ||
-                                    dirName.contains(browserType + "-");
-                            logger.debug("[Static Init] Checking directory: {} -> match: {}", dirName, isMatch);
+                                    dirName.contains(browserType + "-") ||
+                                    dirName.equalsIgnoreCase(browserType);
+                            LoggingConfigUtil.logDebugIfVerbose(logger, "[Static Init] Checking directory: {} -> match: {}", dirName, isMatch);
                             return isMatch;
                         });
             }
@@ -367,7 +390,7 @@ public class PlaywrightManager {
             LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Browser {} installed: {}", browserType, browserInstalled);
             return browserInstalled;
         } catch (Exception e) {
-            logger.warn("[Static Init] Failed to check browsers installation", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Failed to check browsers installation", e);
             return false;
         }
     }
@@ -385,7 +408,7 @@ public class PlaywrightManager {
                     "-cp", System.getProperty("java.class.path"),
                     "com.microsoft.playwright.CLI",
                     "install",
-                    browserType,
+                    browserType,  // 只下载配置的浏览器类型
                     "ffmpeg"
             );
 
@@ -399,16 +422,28 @@ public class PlaywrightManager {
             LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Starting Playwright {} browser download...", browserType);
             Process process = pb.start();
 
-            int exitCode = process.waitFor();
-            if (exitCode == 0) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright {} browser downloaded successfully!", browserType);
-            } else {
-                logger.warn("[Static Init] Playwright {} browser download failed with exit code: {}", browserType, exitCode);
-                logger.warn("[Static Init] Browsers will be downloaded on first use");
+            // 跟踪下载进程,以便在 JVM 退出时终止
+            synchronized (downloadProcesses) {
+                downloadProcesses.add(process);
+            }
+
+            // 在完成后从列表中移除
+            try {
+                int exitCode = process.waitFor();
+                if (exitCode == 0) {
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "[Static Init] Playwright {} browser downloaded successfully!", browserType);
+                } else {
+                    LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Playwright {} browser download failed with exit code: {}", browserType, exitCode);
+                    LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Browsers will be downloaded on first use");
+                }
+            } finally {
+                synchronized (downloadProcesses) {
+                    downloadProcesses.remove(process);
+                }
             }
         } catch (Exception e) {
-            logger.warn("[Static Init] Failed to download Playwright browsers", e);
-            logger.warn("[Static Init] Browsers will be downloaded on first use");
+            LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Failed to download Playwright browsers", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "[Static Init] Browsers will be downloaded on first use");
         }
     }
 
@@ -436,7 +471,7 @@ public class PlaywrightManager {
 
             return hexString.toString();
         } catch (Exception e) {
-            logger.warn("Failed to generate hash, using fallback method", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to generate hash, using fallback method", e);
             return Long.toHexString(System.currentTimeMillis()) +
                     Long.toHexString(System.nanoTime()) +
                     Long.toHexString(Thread.currentThread().getId());
@@ -461,7 +496,7 @@ public class PlaywrightManager {
 
             return new Dimension(logicalWidth, logicalHeight);
         } catch (Exception e) {
-            logger.warn("Failed to get screen size, using default: {}", e.getMessage());
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to get screen size, using default: {}", e.getMessage());
             return new Dimension(1920, 1080);
         }
     }
@@ -479,7 +514,7 @@ public class PlaywrightManager {
             ScreenshotStrategy strategy = ScreenshotStrategy.from(environmentVariables);
             return strategy.shouldTakeScreenshotFor(step);
         } catch (Exception e) {
-            logger.warn("Failed to determine screenshot strategy, taking screenshot anyway", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to determine screenshot strategy, taking screenshot anyway", e);
             return true;
         }
     }
@@ -497,7 +532,7 @@ public class PlaywrightManager {
             ScreenshotStrategy strategy = ScreenshotStrategy.from(environmentVariables);
             return strategy.shouldTakeScreenshotFor(result);
         } catch (Exception e) {
-            logger.warn("Failed to determine screenshot strategy, taking screenshot anyway", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to determine screenshot strategy, taking screenshot anyway", e);
             return true;
         }
     }
@@ -515,7 +550,7 @@ public class PlaywrightManager {
             ScreenshotStrategy strategy = ScreenshotStrategy.from(environmentVariables);
             return strategy.shouldTakeScreenshotFor(testOutcome);
         } catch (Exception e) {
-            logger.warn("Failed to determine screenshot strategy, taking screenshot anyway", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to determine screenshot strategy, taking screenshot anyway", e);
             return true;
         }
     }
@@ -527,12 +562,11 @@ public class PlaywrightManager {
      * 默认值: DOMCONTENTLOADED
      */
     private static LoadState getConfiguredLoadState() {
-        String loadStateConfig = SystemEnvironmentVariables.currentEnvironmentVariables()
-                .getProperty("playwright.page.load.state", "DOMCONTENTLOADED");
+        String loadStateConfig = FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_PAGE_LOAD_STATE);
         try {
             return LoadState.valueOf(loadStateConfig.toUpperCase());
         } catch (IllegalArgumentException e) {
-            logger.warn("Invalid LoadState configuration: {}, using default: DOMCONTENTLOADED", loadStateConfig);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Invalid LoadState configuration: {}, using default: DOMCONTENTLOADED", loadStateConfig);
             return LoadState.DOMCONTENTLOADED;
         }
     }
@@ -573,101 +607,95 @@ public class PlaywrightManager {
      * 初始化 Playwright 实例
      */
     private static void initializePlaywright(String configId) {
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Initializing Playwright for config: {}", configId);
+        Playwright.CreateOptions createOptions = getCreateOptions();
+
         try {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Initializing Playwright for config: {}", configId);
-
-            // 检查是否配置了浏览器channel
-            String channel = getBrowserChannel();
-            boolean useChannel = channel != null && !channel.isEmpty();
-
-            // 根据配置决定是否跳过浏览器下载
-            boolean skipDownload = isSkipBrowserDownload();
-
-            if (useChannel) {
-                // 当使用channel时，Playwright会使用系统浏览器，不下载二进制文件
-                System.setProperty("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
-                logger.info("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 (using system browser via channel: {}, no download needed)", channel);
-            } else if (skipDownload) {
-                System.setProperty("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
-                logger.info("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 (playwright.skip.browser.download=true)");
-            } else {
-                System.setProperty("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "0");
-                logger.info("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 (will download browsers if needed)");
-            }
-
-            // 使用channel时不需要设置browsers path（会使用系统浏览器）
-            String browsersPath;
-            if (!useChannel) {
-                browsersPath = System.getProperty("PLAYWRIGHT_BROWSERS_PATH", DEFAULT_PLAYWRIGHT_CACHE_PATH);
-                logger.info("Using Playwright browsers path: {}", browsersPath);
-            } else {
-                browsersPath = null;  // 使用系统浏览器，不需要缓存路径
-                logger.info("Using system browser (channel: {}), skipping browser cache path", channel);
-            }
-
-            String driverPath = System.getProperty("PLAYWRIGHT_DRIVER_PATH", DEFAULT_PLAYWRIGHT_DRIVER_PATH);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Using Playwright driver path: {}", driverPath);
-
-            if (!useChannel) {
-                Path absoluteBrowsersPath = Paths.get(browsersPath).toAbsolutePath();
-                LoggingConfigUtil.logInfoIfVerbose(logger, "Absolute Playwright browsers path: {}", absoluteBrowsersPath);
-            }
-            Path absoluteDriverPath = Paths.get(driverPath).toAbsolutePath();
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Absolute Playwright driver path: {}", absoluteDriverPath);
-
-            Playwright playwright = Playwright.create();
+            Playwright playwright = Playwright.create(createOptions);
             playwrightInstances.put(configId, playwright);
             LoggingConfigUtil.logInfoIfVerbose(logger, "Playwright initialized successfully for config: {}", configId);
         } catch (Exception e) {
-            logger.error("Failed to initialize Playwright for config: {}", configId, e);
-            throw new RuntimeException("Failed to initialize Playwright", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to initialize Playwright for config: {}", configId, e);
+            // 清理已创建的实例（如果有）
+            if (playwrightInstances.containsKey(configId)) {
+                playwrightInstances.remove(configId);
+            }
+            throw new RuntimeException("Failed to initialize Playwright for config: " + configId, e);
         }
+    }
+
+    private static Playwright.CreateOptions getCreateOptions() {
+        Playwright.CreateOptions options = new Playwright.CreateOptions();
+        Map<String, String> env = new HashMap<>();
+
+        // 跳过浏览器下载
+        if(isSkipBrowserDownload()){
+            env.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+        }
+
+        // 使用绝对路径确保 Playwright 正确识别
+        Path browsersPath = Paths.get(DEFAULT_PLAYWRIGHT_BROWSER_PATH).toAbsolutePath();
+
+        // 设置浏览器路径
+        env.put("PLAYWRIGHT_BROWSERS_PATH", browsersPath.toString());
+        LoggingConfigUtil.logInfoIfVerbose(logger, "[Playwright Options] BROWSERS_PATH: {}", browsersPath);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "[Playwright Options] SKIP_BROWSER_DOWNLOAD: {}", isSkipBrowserDownload());
+
+        options.setEnv(env);
+
+        return options;
     }
 
     /**
      * 初始化 Browser 实例
      */
     private static void initializeBrowser(String configId) {
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Initializing Browser for config: {}", configId);
+
+        if (playwrightInstances.containsKey(configId)) {
+            LoggingConfigUtil.logDebugIfVerbose(logger, "Playwright instance already exists for config: {}, skipping initialization", configId);
+        } else {
+            initializePlaywright(configId);
+        }
+
+        Playwright playwright = playwrightInstances.get(configId);
+        if (playwright == null) {
+            throw new RuntimeException("Playwright instance is null after initialization for config: " + configId);
+        }
+
+        // 获取浏览器配置
+        String browserType = getBrowserType();
+        boolean headless = isHeadless();
+        int slowMo = getBrowserSlowMo();
+        int timeout = getBrowserTimeout();
+
+        BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
+                .setHeadless(headless)
+                .setSlowMo(slowMo)
+                .setTimeout(timeout);
+
+        // 配置窗口大小和启动参数
+        configureBrowserLaunchOptions(launchOptions);
+
+        // 设置下载路径
+        String downloadsPath = getBrowserDownloadsPath();
+        launchOptions.setDownloadsPath(Paths.get(downloadsPath));
+
         try {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Initializing Browser for config: {}", configId);
-
-            if (playwrightInstances.containsKey(configId)) {
-                LoggingConfigUtil.logDebugIfVerbose(logger, "Playwright instance already exists for config: {}, skipping initialization", configId);
-            } else {
-                initializePlaywright(configId);
-            }
-
-            Playwright playwright = playwrightInstances.get(configId);
-            if (playwright == null) {
-                throw new RuntimeException("Playwright instance is null after initialization for config: " + configId);
-            }
-
-            // 获取浏览器配置
-            String browserType = getBrowserType();
-            boolean headless = isHeadless();
-            int slowMo = getBrowserSlowMo();
-            int timeout = getBrowserTimeout();
-
-            BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
-                    .setHeadless(headless)
-                    .setSlowMo(slowMo)
-                    .setTimeout(timeout);
-
-            // 配置窗口大小和启动参数
-            configureBrowserLaunchOptions(launchOptions);
-
-            // 设置下载路径
-            String downloadsPath = getBrowserDownloadsPath();
-            launchOptions.setDownloadsPath(Paths.get(downloadsPath));
-
             // 启动浏览器
             Browser browser = setupBrowser(playwright, browserType, launchOptions);
             browserInstances.put(configId, browser);
 
             LoggingConfigUtil.logInfoIfVerbose(logger, "Browser initialized successfully: {} for config: {}", browserType, configId);
         } catch (Exception e) {
-            logger.error("Failed to initialize Browser for config: {}", configId, e);
-            throw new RuntimeException("Failed to initialize Browser", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to initialize Browser for config: {}", configId, e);
+
+            // 清理已创建的实例（如果有）
+            if (browserInstances.containsKey(configId)) {
+                browserInstances.remove(configId);
+            }
+
+            throw new RuntimeException("Failed to initialize Browser for config: " + configId, e);
         }
     }
 
@@ -738,20 +766,32 @@ public class PlaywrightManager {
     /**
      * 根据配置选择浏览器类型
      */
-    private static Browser setupBrowser(Playwright playwright, String browserType, BrowserType.LaunchOptions launchOptions) {
+    private static Browser setupBrowser(Playwright playwright, String browserType, BrowserType.LaunchOptions
+            launchOptions) {
         if (playwright == null) {
             throw new IllegalArgumentException("Playwright instance cannot be null");
         }
 
-        switch (browserType.toLowerCase()) {
-            case "chromium":
-                return playwright.chromium().launch(launchOptions);
-            case "firefox":
-                return playwright.firefox().launch(launchOptions);
-            case "webkit":
-                return playwright.webkit().launch(launchOptions);
-            default:
-                throw new IllegalArgumentException("Unsupported browser type: " + browserType);
+        try {
+            switch (browserType.toLowerCase()) {
+                case "chromium":
+                    return playwright.chromium().launch(launchOptions);
+                case "firefox":
+                    return playwright.firefox().launch(launchOptions);
+                case "webkit":
+                    return playwright.webkit().launch(launchOptions);
+                default:
+                    throw new IllegalArgumentException("Unsupported browser type: " + browserType);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to launch browser {} with options: {}", browserType, launchOptions, e);
+
+            // 提供更详细的错误信息
+            if (e instanceof TimeoutError) {
+                logger.error("Browser launch timed out. Consider increasing timeout or checking browser installation.");
+            }
+
+            throw new RuntimeException("Failed to launch browser " + browserType, e);
         }
     }
 
@@ -936,7 +976,7 @@ public class PlaywrightManager {
         String latitudeStr = getGeolocationLatitude();
         String longitudeStr = getGeolocationLongitude();
 
-        if (latitudeStr != null && longitudeStr != null) {
+        if (latitudeStr != null && longitudeStr != null && !latitudeStr.isEmpty() && !longitudeStr.isEmpty()) {
             try {
                 double latitude = Double.parseDouble(latitudeStr);
                 double longitude = Double.parseDouble(longitudeStr);
@@ -1165,7 +1205,8 @@ public class PlaywrightManager {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Page closed");
                 }
             } catch (Exception e) {
-                logger.warn("Failed to close page: {}", e.getMessage());
+                logger.error("Failed to close page: {}", e.getMessage(), e);
+                throw new RuntimeException("Failed to close page", e);
             } finally {
                 pageThreadLocal.remove();
             }
@@ -1190,7 +1231,8 @@ public class PlaywrightManager {
                 context.close();
                 LoggingConfigUtil.logInfoIfVerbose(logger, "BrowserContext closed");
             } catch (Exception e) {
-                logger.warn("Failed to close BrowserContext: {}", e.getMessage());
+                logger.error("Failed to close BrowserContext: {}", e.getMessage(), e);
+                throw new RuntimeException("Failed to close BrowserContext", e);
             } finally {
                 contextThreadLocal.remove();
             }
@@ -1237,7 +1279,7 @@ public class PlaywrightManager {
             LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Browser restarted successfully for config: {}", configId);
         } catch (Exception e) {
             logger.error("Failed to restart browser for config: {}", configId, e);
-            throw new RuntimeException("Failed to restart browser", e);
+            throw new RuntimeException("Failed to restart browser for config: " + configId, e);
         }
     }
 
@@ -1246,6 +1288,9 @@ public class PlaywrightManager {
      */
     public static void cleanupAll() {
         LoggingConfigUtil.logInfoIfVerbose(logger, "Cleaning up all Playwright resources...");
+
+        // 终止所有浏览器下载进程
+        terminateDownloadProcesses();
 
         // 关闭当前线程的页面和上下文
         closePage();
@@ -1273,6 +1318,39 @@ public class PlaywrightManager {
 
         currentConfigId = null;
         LoggingConfigUtil.logInfoIfVerbose(logger, "All Playwright resources cleaned up");
+    }
+
+    /**
+     * 终止所有浏览器下载进程
+     */
+    private static void terminateDownloadProcesses() {
+        synchronized (downloadProcesses) {
+            if (downloadProcesses.isEmpty()) {
+                return;
+            }
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Terminating {} browser download processes...", downloadProcesses.size());
+
+            for (Process process : downloadProcesses) {
+                try {
+                    if (process.isAlive()) {
+                        process.destroy();
+                        // 等待最多 5 秒让进程正常退出
+                        boolean exited = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+                        if (!exited) {
+                            LoggingConfigUtil.logWarnIfVerbose(logger, "Download process did not exit gracefully, forcing termination");
+                            process.destroyForcibly();
+                        }
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Download process terminated");
+                    }
+                } catch (Exception e) {
+                    logger.warn("Failed to terminate download process: {}", e.getMessage());
+                }
+            }
+
+            downloadProcesses.clear();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "All download processes terminated");
+        }
     }
 
     /**

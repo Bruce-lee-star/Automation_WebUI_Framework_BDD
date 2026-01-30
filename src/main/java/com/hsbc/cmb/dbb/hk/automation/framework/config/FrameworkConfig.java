@@ -87,7 +87,7 @@ public enum FrameworkConfig {
      */
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD(
         "playwright.skip.browser.download",
-        "false",
+        "true",
         "跳过 Playwright 浏览器下载"
     ),
 
@@ -349,7 +349,7 @@ public enum FrameworkConfig {
      */
     PLAYWRIGHT_PAGE_LOAD_STATE(
         "playwright.page.load.state",
-        "NETWORKIDLE",
+        "DOMCONTENTLOADED",
         "页面加载状态"
     ),
 
@@ -588,11 +588,16 @@ public enum FrameworkConfig {
      * Playwright SDK 目录
      * 指定 Playwright SDK 的存储目录
      */
-    PLAYWRIGHT_SDK_DIR(
-        "playwright.sdk.dir",
+    PLAYWRIGHT_SDK_PATH(
+        "playwright.sdk.path",
         ".playwright/sdk",
         "Playwright SDK 目录"
-    );
+    ),
+
+    PLAYWRIGHT_BROWSERS_PATH(
+            "playwright.browsers.path",
+            ".playwright/browsers",
+            "Playwright browser 路径");
 
     private final String key;
     private final String defaultValue;

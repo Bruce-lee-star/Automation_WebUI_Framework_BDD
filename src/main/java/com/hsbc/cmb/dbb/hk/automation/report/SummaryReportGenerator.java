@@ -3,6 +3,7 @@ package com.hsbc.cmb.dbb.hk.automation.report;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.hsbc.cmb.dbb.hk.automation.framework.lifecycle.PlaywrightManager;
+import com.hsbc.cmb.dbb.hk.automation.framework.util.LoggingConfigUtil;
 import net.thucydides.model.domain.TestOutcome;
 import net.thucydides.model.domain.TestResult;
 import org.slf4j.Logger;
@@ -69,13 +70,13 @@ public class SummaryReportGenerator {
             // 在生成报告之前，重新加载 Feature 映射（此时 index.html 应该已经生成）
             featureToHtmlMap.clear();
             loadFeatureHtmlMapping();
-            logger.info("Feature mappings reloaded: {} mappings", featureToHtmlMap.size());
-            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Feature mappings reloaded: {} mappings", featureToHtmlMap.size());
+
             String htmlContent = buildHtmlReport();
             writeSummaryFile(htmlContent);
-            logger.info("Summary report generated: {}/{}", customReportDir, SUMMARY_FILE);
-        } catch (Exception e) {
-            logger.error("Failed to generate summary report", e);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Summary report generated: {}/{}", customReportDir, SUMMARY_FILE);
+            } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to generate summary report", e);
         }
     }
     
@@ -187,32 +188,6 @@ public class SummaryReportGenerator {
     private String getJavaScript() {
         return "<script type=\"text/javascript\">\n" +
                 "document.addEventListener('DOMContentLoaded', function() {\n" +
-                "    // 异常信息折叠/展开功能\n" +
-                "    var toggleButtons = document.querySelectorAll('.toggle-exception');\n" +
-                "    for (var i = 0; i < toggleButtons.length; i++) {\n" +
-                "        toggleButtons[i].addEventListener('click', function() {\n" +
-                "            var targetId = this.getAttribute('data-target');\n" +
-                "            var exceptionDiv = document.getElementById(targetId);\n" +
-                "            if (exceptionDiv.style.display === 'none' || !exceptionDiv.style.display) {\n" +
-                "                exceptionDiv.style.display = 'block';\n" +
-                "                // 检查是否会超出视口右边界\n" +
-                "                var rect = this.getBoundingClientRect();\n" +
-                "                var exceptionWidth = 500; // 与CSS中定义的宽度一致\n" +
-                "                if (rect.right + exceptionWidth > window.innerWidth) {\n" +
-                "                    // 如果会超出右边界，则显示在左边\n" +
-                "                    exceptionDiv.style.left = 'auto';\n" +
-                "                    exceptionDiv.style.right = '100%';\n" +
-                "                    exceptionDiv.style.marginLeft = '0';\n" +
-                "                    exceptionDiv.style.marginRight = '10px';\n" +
-                "                }\n" +
-                "                this.textContent = 'Hide Exception';\n" +
-                "            } else {\n" +
-                "                exceptionDiv.style.display = 'none';\n" +
-                "                this.textContent = 'Show Exception';\n" +
-                "            }\n" +
-                "        });\n" +
-                "    }\n" +
-                "    \n" +
                 "    // 筛选功能\n" +
                 "    var featureFilter = document.getElementById('feature-filter');\n" +
                 "    var scenarioFilter = document.getElementById('scenario-filter');\n" +
@@ -397,6 +372,22 @@ public class SummaryReportGenerator {
                 "    });\n" +
                 "" +
                 "    clearFiltersBtn.addEventListener('click', clearFilters);\n" +
+                "    \n" +
+                "    // Show Exception 按钮事件委托\n" +
+                "    testTable.addEventListener('click', function(event) {\n" +
+                "        var button = event.target.closest('.toggle-exception');\n" +
+                "        if (!button) return;\n" +
+                "        \n" +
+                "        var targetId = button.getAttribute('data-target');\n" +
+                "        if (!targetId) return;\n" +
+                "        \n" +
+                "        var exceptionDiv = document.getElementById(targetId);\n" +
+                "        if (exceptionDiv) {\n" +
+                "            var isHidden = exceptionDiv.style.display === 'none' || exceptionDiv.style.display === '';\n" +
+                "            exceptionDiv.style.display = isHidden ? 'block' : 'none';\n" +
+                "            button.textContent = isHidden ? 'Hide Exception' : 'Show Exception';\n" +
+                "        }\n" +
+                "    });\n" +
                 "    \n" +
                 "    // CSV下载功能\n" +
                 "    function downloadCSV() {\n" +
@@ -1205,7 +1196,7 @@ public class SummaryReportGenerator {
             try {
                 loadTestResultsFromJsonFiles();
             } catch (Exception e) {
-                logger.warn("Failed to load test results from JSON files", e);
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to load test results from JSON files", e);
             }
         }
         
@@ -1328,10 +1319,10 @@ public class SummaryReportGenerator {
             // 从映射中查找Feature的HTML链接（Scenario在Feature中定义，链接一定存在）
             String featureReportLink = featureToHtmlMap.get(featureName);
 
-            // 调试日志：输出Feature名称和链接
-            logger.info("Processing Feature: {}, Link: {}", featureName, featureReportLink);
+            // Debug log: Output Feature name and link
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Processing Feature: {}, Link: {}", featureName, featureReportLink);
             if (featureReportLink == null) {
-                logger.warn("Feature link not found for: {}. Available features in map: {}", featureName, featureToHtmlMap.keySet());
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Feature link not found for: {}. Available features in map: {}", featureName, featureToHtmlMap.keySet());
             }
 
             boolean firstTestForFeature = true;
@@ -1529,7 +1520,7 @@ public class SummaryReportGenerator {
         try {
             File reportDir = new File(customReportDir);
             if (!reportDir.exists()) {
-                logger.info("Report directory does not exist: {}, creating it", customReportDir);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Report directory does not exist: {}, creating it", customReportDir);
                 reportDir.mkdirs();
             }
 
@@ -1554,14 +1545,14 @@ public class SummaryReportGenerator {
             
             // 4. 如果仍然为空，创建一个示例TestOutcome
             if (outcomes.isEmpty()) {
-                logger.info("No test outcomes found, creating a sample outcome for demonstration");
+                LoggingConfigUtil.logInfoIfVerbose(logger, "No test outcomes found, creating a sample outcome for demonstration");
                 // 这里我们不创建实际的TestOutcome，让报告显示空结果
             }
-            
-            logger.info("Loaded {} test outcomes from report directory", outcomes.size());
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Loaded {} test outcomes from report directory", outcomes.size());
             return outcomes;
         } catch (Exception e) {
-            logger.error("Failed to load test outcomes", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to load test outcomes", e);
             return new ArrayList<>();
         }
     }
@@ -1584,8 +1575,8 @@ public class SummaryReportGenerator {
                         }
                     }
                 }
-            } catch (Exception e) {
-                logger.warn("Failed to read .ser file: {}, error: {}", serFile.getName(), e.getMessage());
+                } catch (Exception e) {
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to read .ser file: {}, error: {}", serFile.getName(), e.getMessage());
             }
         }
         
@@ -1611,27 +1602,27 @@ public class SummaryReportGenerator {
             File[] jsonFiles = serenityDir.listFiles((dir, name) -> name.endsWith(".json"));
 
             if (jsonFiles != null && jsonFiles.length > 0) {
-                logger.info("Found {} JSON files in serenity directory: {}", jsonFiles.length, serenityDir.getAbsolutePath());
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Found {} JSON files in serenity directory: {}", jsonFiles.length, serenityDir.getAbsolutePath());
 
                 // 直接解析JSON文件（优先使用，因为Serenity 4.1.3的API可能已改变）
                 for (File jsonFile : jsonFiles) {
                     try {
-                        logger.info("Attempting to parse JSON file: {}", jsonFile.getName());
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Attempting to parse JSON file: {}", jsonFile.getName());
                         parseJsonFileAndAddToSimpleOutcomes(jsonFile);
                     } catch (Exception ex) {
-                        logger.warn("Failed to parse JSON file: {} - {}", jsonFile.getName(), ex.getMessage());
+                        LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to parse JSON file: {} - {}", jsonFile.getName(), ex.getMessage());
                         ex.printStackTrace();
                     }
                 }
 
-                logger.info("Loaded {} test outcomes by directly parsing JSON files", simpleTestOutcomes.size());
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Loaded {} test outcomes by directly parsing JSON files", simpleTestOutcomes.size());
             } else {
-                logger.warn("No JSON files found in serenity directory: {}", serenityDir.getAbsolutePath());
+                LoggingConfigUtil.logWarnIfVerbose(logger, "No JSON files found in serenity directory: {}", serenityDir.getAbsolutePath());
             }
             
             return outcomes;
         } catch (Exception e) {
-            logger.error("Failed to load test outcomes from JSON files", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to load test outcomes from JSON files", e);
             return new ArrayList<>();
         }
     }
@@ -1663,8 +1654,8 @@ public class SummaryReportGenerator {
                     if (userStory != null && userStory.has("storyName")) {
                         featureName = userStory.get("storyName").getAsString();
                     }
-                } catch (Exception e) {
-                    logger.warn("Failed to extract featureName from userStory for: {}", jsonFile.getName());
+                    } catch (Exception e) {
+                    LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to extract featureName from userStory for: {}", jsonFile.getName());
                 }
             }
 
@@ -1678,7 +1669,7 @@ public class SummaryReportGenerator {
                     try {
                         failureMessage = jsonObject.get("testFailureMessage").getAsString();
                     } catch (Exception e) {
-                        logger.warn("Failed to extract testFailureMessage as string for: {}", jsonFile.getName());
+                        LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to extract testFailureMessage as string for: {}", jsonFile.getName());
                         failureMessage = jsonObject.get("testFailureMessage").toString();
                     }
                 }
@@ -1701,7 +1692,7 @@ public class SummaryReportGenerator {
                             }
                         } catch (Exception ex) {
                             // 最后的备选方案：使用toString()
-                            logger.warn("Failed to extract testFailureCause for: {}", jsonFile.getName());
+                            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to extract testFailureCause for: {}", jsonFile.getName());
                             failureCause = new RuntimeException(jsonObject.get("testFailureCause").toString());
                         }
                     }
@@ -1712,10 +1703,10 @@ public class SummaryReportGenerator {
             SimpleTestOutcome outcome = createSimpleTestOutcomeFromJson(name, resultStr, duration, failureMessage, failureCause, htmlFileName, featureName);
             simpleTestOutcomes.add(outcome);
 
-            logger.info("Successfully parsed test outcome: {} in feature: {} with result: {}", name, featureName, outcome.getResult());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Successfully parsed test outcome: {} in feature: {} with result: {}", name, featureName, outcome.getResult());
 
         } catch (Exception e) {
-            logger.warn("Failed to parse JSON file: {}", jsonFile.getName(), e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to parse JSON file: {}", jsonFile.getName(), e);
         }
     }
     
@@ -1818,20 +1809,20 @@ public class SummaryReportGenerator {
         File[] jsonFiles = serenityDir.listFiles((dir, name) -> name.endsWith(".json"));
 
         if (jsonFiles != null && jsonFiles.length > 0) {
-            logger.info("Found {} JSON files, attempting to parse directly", jsonFiles.length);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Found {} JSON files, attempting to parse directly", jsonFiles.length);
 
             for (File jsonFile : jsonFiles) {
                 try {
                     parseJsonFileAndAddToSimpleOutcomes(jsonFile);
                 } catch (Exception e) {
-                    logger.warn("Failed to parse JSON file: {}", jsonFile.getName(), e);
+                    LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to parse JSON file: {}", jsonFile.getName(), e);
                 }
             }
 
             // 重新计算结果统计
             recalculateResultCounts();
 
-            logger.info("Successfully loaded {} test outcomes from JSON files", simpleTestOutcomes.size());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Successfully loaded {} test outcomes from JSON files", simpleTestOutcomes.size());
         }
     }
     
@@ -1869,22 +1860,22 @@ public class SummaryReportGenerator {
                             }
                         }
                     }
-                    
-                    logger.info("Loaded {} test outcomes from index.html", simpleTestOutcomes.size());
+
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Loaded {} test outcomes from index.html", simpleTestOutcomes.size());
                 } catch (Exception e) {
-                    logger.warn("Failed to parse index.html", e);
+                    LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to parse index.html", e);
                 }
             }
             
             // 如果仍然没有找到测试结果，创建一个默认的TestOutcome
             if (simpleTestOutcomes.isEmpty()) {
-                logger.warn("No test outcomes found, creating a default outcome for demonstration");
+                LoggingConfigUtil.logWarnIfVerbose(logger, "No test outcomes found, creating a default outcome for demonstration");
                 // 这里可以创建一个默认的TestOutcome用于演示
                 // 在实际使用中，可能不需要这样做
             }
-            
+
         } catch (Exception e) {
-            logger.error("Failed to load test outcomes from other files", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to load test outcomes from other files", e);
         }
     }
 
@@ -1899,50 +1890,50 @@ public class SummaryReportGenerator {
             int maxRetries = 10;
             int retryCount = 0;
             while (!indexFile.exists() && retryCount < maxRetries) {
-                logger.warn("index.html not found at {}, waiting... (attempt {}/{})",
+                LoggingConfigUtil.logWarnIfVerbose(logger, "index.html not found at {}, waiting... (attempt {}/{})",
                     indexFile.getAbsolutePath(), retryCount + 1, maxRetries);
                 Thread.sleep(1000); // 等待 1 秒
                 retryCount++;
             }
 
             if (!indexFile.exists()) {
-                logger.error("index.html still not found after {} attempts at {}, cannot load Feature mapping",
+                LoggingConfigUtil.logErrorIfVerbose(logger, "index.html still not found after {} attempts at {}, cannot load Feature mapping",
                     maxRetries, indexFile.getAbsolutePath());
                 return;
             }
 
             String indexContent = new String(Files.readAllBytes(indexFile.toPath()), "UTF-8");
-            logger.info("Loaded index.html, size: {} bytes", indexContent.length());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Loaded index.html, size: {} bytes", indexContent.length());
 
             // 查找第一个Features表格（在"Functional Coverage Details"部分）
             int featuresHeaderStart = indexContent.indexOf("Functional Coverage Details");
             if (featuresHeaderStart == -1) {
-                logger.warn("Functional Coverage Details section not found in index.html");
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Functional Coverage Details section not found in index.html");
                 return;
             }
 
             // 从Functional Coverage Details之后查找<h4>Features</h4>
             int featuresStart = indexContent.indexOf("<h4>Features</h4>", featuresHeaderStart);
             if (featuresStart == -1) {
-                logger.warn("Features header not found after Functional Coverage Details");
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Features header not found after Functional Coverage Details");
                 return;
             }
 
             // 查找Features表格
             int featureTableStart = indexContent.indexOf("<table", featuresStart);
             if (featureTableStart == -1) {
-                logger.warn("Feature table not found after Features header");
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Feature table not found after Features header");
                 return;
             }
 
             int featureTableEnd = indexContent.indexOf("</table>", featureTableStart);
             if (featureTableEnd == -1) {
-                logger.warn("Feature table end not found in index.html");
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Feature table end not found in index.html");
                 return;
             }
 
             String featureTableSection = indexContent.substring(featureTableStart, featureTableEnd + 8);
-            logger.debug("Extracted Feature table section, length: {} bytes", featureTableSection.length());
+            LoggingConfigUtil.logDebugIfVerbose(logger, "Extracted Feature table section, length: {} bytes", featureTableSection.length());
 
             // 使用正则表达式提取Feature和对应的HTML链接
             // 模式：匹配 <a href="xxx.html"> FeatureName </a>
@@ -1957,7 +1948,7 @@ public class SummaryReportGenerator {
                 String featureNameRaw = matcher.group(2);
                 String featureName = featureNameRaw.trim();
 
-                logger.debug("Regex matched - htmlFile: '{}', featureName raw: '{}', featureName trimmed: '{}'",
+                LoggingConfigUtil.logDebugIfVerbose(logger, "Regex matched - htmlFile: '{}', featureName raw: '{}', featureName trimmed: '{}'",
                     htmlFile, featureNameRaw, featureName);
 
                 // 只处理以Feature名称（非错误/结果图标链接）作为链接文本的情况
@@ -1968,20 +1959,20 @@ public class SummaryReportGenerator {
                     if (featureFile.exists()) {
                         // 既然HTML文件存在，就是有效的Feature报告
                         featureToHtmlMap.put(featureName, htmlFile);
-                        logger.info("Mapped Feature: '{}' -> {}", featureName, htmlFile);
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Mapped Feature: '{}' -> {}", featureName, htmlFile);
                     } else {
-                        logger.warn("Feature file does not exist: {}", htmlFile);
+                        LoggingConfigUtil.logWarnIfVerbose(logger, "Feature file does not exist: {}", htmlFile);
                     }
                 } else {
-                    logger.debug("Skipping match: htmlFile starts with '#'");
-                }
+LoggingConfigUtil.logDebugIfVerbose(logger, "Skipping match: htmlFile starts with '#'");
+            }
             }
 
-            logger.info("Found {} total matches, loaded {} Feature mappings from index.html", matchCount, featureToHtmlMap.size());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Found {} total matches, loaded {} Feature mappings from index.html", matchCount, featureToHtmlMap.size());
 
-            logger.info("Loaded {} Feature mappings from index.html", featureToHtmlMap.size());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Loaded {} Feature mappings from index.html", featureToHtmlMap.size());
         } catch (Exception e) {
-            logger.warn("Failed to load Feature HTML mapping from index.html", e);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to load Feature HTML mapping from index.html", e);
         }
     }
 
@@ -2124,7 +2115,7 @@ public class SummaryReportGenerator {
                             return jsonFileName.replace(".json", ".html");
                         }
                     } catch (Exception e) {
-                        logger.warn("Failed to parse JSON file: {}", jsonFile.getName(), e);
+                        LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to parse JSON file: {}", jsonFile.getName(), e);
                     }
                 }
             }
@@ -2139,7 +2130,7 @@ public class SummaryReportGenerator {
                             return htmlFile.getName();
                         }
                     } catch (Exception e) {
-                        logger.warn("Failed to read HTML file: {}", htmlFile.getName(), e);
+                        LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to read HTML file: {}", htmlFile.getName(), e);
                     }
                 }
             }
@@ -2148,7 +2139,7 @@ public class SummaryReportGenerator {
             return testName.replace(" ", "_") + ".html";
             
         } catch (Exception e) {
-            logger.error("Error finding HTML file for test: {}", testName, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Error finding HTML file for test: {}", testName, e);
             return testName.replace(" ", "_") + ".html";
         }
     }
@@ -2268,20 +2259,21 @@ public class SummaryReportGenerator {
     public static void main(String[] args) {
         try {
             String reportDir = args.length > 0 ? args[0] : REPORT_DIR;
-            System.out.println("生成邮件友好报告到目录: " + reportDir);
+            System.out.println("Generating email-friendly summary report to directory: " + reportDir);
             SummaryReportGenerator generator = new SummaryReportGenerator(reportDir);
             generator.generateSummaryReport();
-            
+
             // 检查文件是否存在
             java.io.File reportFile = new java.io.File(reportDir, "summary.html");
             if (reportFile.exists()) {
-                System.out.println("报告文件已生成: " + reportFile.getAbsolutePath());
-                System.out.println("文件大小: " + reportFile.length() + " 字节");
+                String reportPath = "file:///" + reportFile.getAbsolutePath().replace("\\", "/");
+                System.out.println("Summary report file generated: " + reportPath);
+                System.out.println("File size: " + reportFile.length() + " bytes");
             } else {
-                System.out.println("报告文件未找到！");
+                System.out.println("Summary report file not found!");
             }
-            
-            System.out.println("报告生成完成!");
+
+            System.out.println("Summary report generation completed!");
         } catch (Exception e) {
             e.printStackTrace();
         }
