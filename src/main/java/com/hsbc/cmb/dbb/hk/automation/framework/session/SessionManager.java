@@ -39,8 +39,8 @@ import java.util.Map;
  * Using env+username allows same username to have different sessions in different environments
  *
  * Session Configuration (in serenity.conf):
- * - session.timeout: Session timeout in minutes (default: 30)
- *   Example: session.timeout=60
+ * - playwright.no.login.session.timeout.minutes: Session timeout in minutes (default: 5)
+ *   Example: playwright.no.login.session.timeout.minutes=60
  *
  * Session Storage: target/.sessions/
  */

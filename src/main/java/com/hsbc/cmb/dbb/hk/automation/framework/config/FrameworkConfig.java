@@ -604,7 +604,7 @@ public enum FrameworkConfig {
      * After this period, saved sessions will be considered expired
      */
     PLAYWRIGHT_NO_LOGIN_SESSION_TIMEOUT(
-        "playwright.no.login.session.timeout",
+        "playwright.no.login.session.timeout.minutes",
         "5",
         "No login session timeout (minutes)");
 
