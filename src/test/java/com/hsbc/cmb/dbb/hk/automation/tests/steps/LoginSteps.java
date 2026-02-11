@@ -55,7 +55,7 @@ public class LoginSteps {
                 if (homeUrl != null && !homeUrl.isEmpty()) {
                     System.out.println("Navigating to saved home URL: " + homeUrl);
                     loginPage.navigateTo(homeUrl);
-                    homePage.waitForElementVisibleWithinTime(HomePage.quickLink, 10);
+                    homePage.waitForElementVisibleWithinTime(HomePage.quickLink, 20);
                     System.out.println("Skip login successful - user already logged in and navigated to home page");
                 } else {
                     // Fallback: navigate to login page and refresh

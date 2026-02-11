@@ -1,9 +1,12 @@
 package com.hsbc.cmb.dbb.hk.automation.framework.session;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.hsbc.cmb.dbb.hk.automation.framework.config.FrameworkConfig;
 import com.hsbc.cmb.dbb.hk.automation.framework.config.FrameworkConfigManager;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.hsbc.cmb.dbb.hk.automation.framework.lifecycle.PlaywrightManager;
 import com.hsbc.cmb.dbb.hk.automation.framework.utils.LoggingConfigUtil;
@@ -51,6 +54,12 @@ public class SessionManager {
 
     // Session storage directory
     private static final String SESSION_DIR = "target/.sessions";
+
+    // Gson instance for JSON serialization (UTF-8 encoding)
+    private static final Gson GSON = new GsonBuilder()
+            .setPrettyPrinting()
+            .setDateFormat("yyyy-MM-dd HH:mm:ss")
+            .create();
 
     // Session timeout in minutes (read from FrameworkConfig)
     private static final long SESSION_TIMEOUT_MINUTES;
@@ -150,18 +159,33 @@ public class SessionManager {
                 session.addCookie(cookieMap);
             }
 
-            // Save to file
+            // Save localStorage
+            try {
+                Page page = PlaywrightManager.getPage();
+                if (page != null) {
+                    Object localStorageObj = page.evaluate("() => { const data = {}; for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); data[key] = localStorage.getItem(key); } return data; }");
+                    @SuppressWarnings("unchecked")
+                    Map<String, String> localStorageData = (Map<String, String>) localStorageObj;
+                    for (Map.Entry<String, String> entry : localStorageData.entrySet()) {
+                        session.setLocalStorageItem(entry.getKey(), entry.getValue());
+                    }
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Saved {} localStorage items for session key: {}", localStorageData.size(), sessionKey);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to save localStorage for session key: {} (continuing without localStorage)", sessionKey, e);
+            }
+
+            // Save to file (JSON format with UTF-8 encoding)
             Path sessionDir = Paths.get(SESSION_DIR);
             if (!Files.exists(sessionDir)) {
                 Files.createDirectories(sessionDir);
             }
 
             String sessionFile = sessionDir.resolve(sessionKey + ".session").toString();
-            try (ObjectOutputStream oos = new ObjectOutputStream(
-                    new BufferedOutputStream(
-                        new FileOutputStream(sessionFile),
-                        8192))) {  // 8KB buffer, UTF-8 encoding
-                oos.writeObject(session);
+            try (Writer writer = new OutputStreamWriter(
+                    new BufferedOutputStream(new FileOutputStream(sessionFile), 8192),
+                    StandardCharsets.UTF_8)) {
+                GSON.toJson(session, writer);
             }
 
             LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session saved for session key: {} to {}", sessionKey, sessionFile);
@@ -208,18 +232,33 @@ public class SessionManager {
                 session.addCookie(cookieMap);
             }
 
-            // Save to file
+            // Save localStorage
+            try {
+                Page page = PlaywrightManager.getPage();
+                if (page != null) {
+                    Object localStorageObj = page.evaluate("() => { const data = {}; for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); data[key] = localStorage.getItem(key); } return data; }");
+                    @SuppressWarnings("unchecked")
+                    Map<String, String> localStorageData = (Map<String, String>) localStorageObj;
+                    for (Map.Entry<String, String> entry : localStorageData.entrySet()) {
+                        session.setLocalStorageItem(entry.getKey(), entry.getValue());
+                    }
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Saved {} localStorage items for user: {}", localStorageData.size(), username);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to save localStorage for user: {} (continuing without localStorage)", username, e);
+            }
+
+            // Save to file (JSON format with UTF-8 encoding)
             Path sessionDir = Paths.get(SESSION_DIR);
             if (!Files.exists(sessionDir)) {
                 Files.createDirectories(sessionDir);
             }
 
             String sessionFile = sessionDir.resolve(username + ".session").toString();
-            try (ObjectOutputStream oos = new ObjectOutputStream(
-                    new BufferedOutputStream(
-                        new FileOutputStream(sessionFile),
-                        8192))) {  // 8KB buffer, UTF-8 encoding
-                oos.writeObject(session);
+            try (Writer writer = new OutputStreamWriter(
+                    new BufferedOutputStream(new FileOutputStream(sessionFile), 8192),
+                    StandardCharsets.UTF_8)) {
+                GSON.toJson(session, writer);
             }
 
             LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session saved for user: {} to {}", username, sessionFile);
@@ -247,11 +286,10 @@ public class SessionManager {
                 return null;
             }
 
-            try (ObjectInputStream ois = new ObjectInputStream(
-                    new BufferedInputStream(
-                        new FileInputStream(sessionFile.toString()),
-                        8192))) {  // 8KB buffer
-                UserSession session = (UserSession) ois.readObject();
+            try (Reader reader = new InputStreamReader(
+                    new BufferedInputStream(new FileInputStream(sessionFile.toString()), 8192),
+                    StandardCharsets.UTF_8)) {
+                UserSession session = GSON.fromJson(reader, UserSession.class);
 
                 // Add session to active sessions
                 activeSessions.put(sessionKey, session);
@@ -281,11 +319,10 @@ public class SessionManager {
                 return null;
             }
 
-            try (ObjectInputStream ois = new ObjectInputStream(
-                    new BufferedInputStream(
-                        new FileInputStream(sessionFile.toString()),
-                        8192))) {  // 8KB buffer
-                UserSession session = (UserSession) ois.readObject();
+            try (Reader reader = new InputStreamReader(
+                    new BufferedInputStream(new FileInputStream(sessionFile.toString()), 8192),
+                    StandardCharsets.UTF_8)) {
+                UserSession session = GSON.fromJson(reader, UserSession.class);
 
                 // Add session to active sessions
                 activeSessions.put(username, session);
@@ -334,8 +371,31 @@ public class SessionManager {
                 ));
             }
 
-            // Restore localStorage if needed
-            // context.addInitScript(...); can use script to set localStorage
+            // Restore localStorage
+            Map<String, String> localStorage = session.getLocalStorage();
+            if (localStorage != null && !localStorage.isEmpty()) {
+                try {
+                    // Create script to set localStorage items
+                    StringBuilder scriptBuilder = new StringBuilder();
+                    scriptBuilder.append("(() => {");
+                    // Clear existing localStorage
+                    scriptBuilder.append("localStorage.clear();");
+                    // Set new localStorage items
+                    for (Map.Entry<String, String> entry : localStorage.entrySet()) {
+                        String key = escapeJsString(entry.getKey());
+                        String value = escapeJsString(entry.getValue());
+                        scriptBuilder.append(String.format("localStorage.setItem('%s', '%s');", key, value));
+                    }
+                    scriptBuilder.append("})();");
+
+                    // Execute the script in the context
+                    context.addInitScript(scriptBuilder.toString());
+
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Restored {} localStorage items for session key: {}", localStorage.size(), sessionKey);
+                } catch (Exception e) {
+                    logger.warn("Failed to restore localStorage for session key: {} (continuing without localStorage)", sessionKey, e);
+                }
+            }
 
             // Update access time to extend session validity
             session.updateAccessTime();
@@ -381,8 +441,31 @@ public class SessionManager {
                 ));
             }
 
-            // Restore localStorage if needed
-            // context.addInitScript(...); can use script to set localStorage
+            // Restore localStorage
+            Map<String, String> localStorage = session.getLocalStorage();
+            if (localStorage != null && !localStorage.isEmpty()) {
+                try {
+                    // Create script to set localStorage items
+                    StringBuilder scriptBuilder = new StringBuilder();
+                    scriptBuilder.append("(() => {");
+                    // Clear existing localStorage
+                    scriptBuilder.append("localStorage.clear();");
+                    // Set new localStorage items
+                    for (Map.Entry<String, String> entry : localStorage.entrySet()) {
+                        String key = escapeJsString(entry.getKey());
+                        String value = escapeJsString(entry.getValue());
+                        scriptBuilder.append(String.format("localStorage.setItem('%s', '%s');", key, value));
+                    }
+                    scriptBuilder.append("})();");
+
+                    // Execute the script in the context
+                    context.addInitScript(scriptBuilder.toString());
+
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Restored {} localStorage items for user: {}", localStorage.size(), username);
+                } catch (Exception e) {
+                    logger.warn("Failed to restore localStorage for user: {} (continuing without localStorage)", username, e);
+                }
+            }
 
             // Update access time to extend session validity
             session.updateAccessTime();
@@ -597,5 +680,23 @@ public class SessionManager {
      */
     private static String generateSessionKey(String env, String username) {
         return env + "_" + username;
+    }
+
+    /**
+     * Escape JavaScript string to prevent syntax errors and XSS
+     *
+     * @param str String to escape
+     * @return Escaped string
+     */
+    private static String escapeJsString(String str) {
+        if (str == null) {
+            return "";
+        }
+        return str.replace("\\", "\\\\")
+                  .replace("'", "\\'")
+                  .replace("\"", "\\\"")
+                  .replace("\n", "\\n")
+                  .replace("\r", "\\r")
+                  .replace("\t", "\\t");
     }
 }
