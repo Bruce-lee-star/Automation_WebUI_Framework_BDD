@@ -369,7 +369,7 @@
                             <goal>java</goal>
                         </goals>
                         <configuration>
-                            <mainClass>com.hsbc.cmb.dbb.hk.automation.report.SummaryReportGenerator</mainClass>
+                            <mainClass>com.hsbc.cmb.hk.dbb.automation.report.SummaryReportGenerator</mainClass>
                             <arguments>
                                 <argument>${project.build.directory}/site/serenity</argument>
                             </arguments>
