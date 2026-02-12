@@ -29,6 +29,7 @@
         <!-- 新增：API 测试相关依赖版本 -->
         <json.path.version>2.7.0</json.path.version>
         <json.version>20231013</json.version>
+        <spring.version>5.3.30</spring.version>
         <commons.lang3.version>3.12.0</commons.lang3.version>
 
         <!-- 日志框架 -->
@@ -103,6 +104,13 @@
         </dependency>
 
         <!-- ==================== 新增：API 测试框架 ==================== -->
+        <!-- Spring Framework for Dependency Injection -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>${spring.version}</version>
+        </dependency>
+
         <!-- Serenity RestAssured for API Testing -->
         <dependency>
             <groupId>net.serenity-bdd</groupId>
