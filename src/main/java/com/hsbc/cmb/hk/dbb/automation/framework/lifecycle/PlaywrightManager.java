@@ -3,6 +3,7 @@ package com.hsbc.cmb.hk.dbb.automation.framework.lifecycle;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.ColorScheme;
 import com.microsoft.playwright.options.LoadState;
+import com.hsbc.cmb.hk.dbb.automation.framework.config.BrowserOverrideManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.config.FrameworkConfig;
 import com.hsbc.cmb.hk.dbb.automation.framework.config.FrameworkConfigManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.core.FrameworkState;
@@ -596,8 +597,26 @@ public class PlaywrightManager {
     /**
      * 初始化 Browser 实例
      */
-    private static void initializeBrowser(String configId) {
+    private static synchronized void initializeBrowser(String configId) {
         LoggingConfigUtil.logInfoIfVerbose(logger, "Initializing Browser for config: {}", configId);
+
+        // 双重检查：如果已经有连接的浏览器实例，直接返回
+        Browser existingBrowser = browserInstances.get(configId);
+        if (existingBrowser != null && existingBrowser.isConnected()) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Browser already initialized and connected for config: {}", configId);
+            return;
+        }
+
+        // 关闭现有浏览器实例（如果存在但未连接）
+        if (existingBrowser != null) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Closing existing browser instance for config: {}", configId);
+            try {
+                existingBrowser.close();
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Existing browser closed successfully");
+            } catch (Exception e) {
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to close existing browser, continuing with new initialization", e);
+            }
+        }
 
         if (playwrightInstances.containsKey(configId)) {
             LoggingConfigUtil.logDebugIfVerbose(logger, "Playwright instance already exists for config: {}, skipping initialization", configId);
@@ -662,9 +681,9 @@ public class PlaywrightManager {
         // 构建启动参数
         List<String> args = new ArrayList<>();
 
-        // 添加基础参数（移除强制 DPI 缩放参数）
-        args.add("--disable-pinch");
-        args.add("--disable-blink-features=AutomationControlled");
+        // 添加基础参数（移除会在地址栏显示的参数）
+        // args.add("--disable-pinch");  // 已移除，避免在地址栏显示
+        // args.add("--disable-blink-features=AutomationControlled");  // 已移除，避免在地址栏显示为 http://automationcontrolled/
 
         // 添加用户配置的浏览器启动参数
         String browserArgs = getBrowserArgs();
@@ -702,11 +721,16 @@ public class PlaywrightManager {
             logger.info("Browser args: {}", args);  // 保留浏览器启动参数日志，这很重要
         }
 
-        // 设置浏览器 channel（如果配置了）
+        // 设置浏览器 channel（仅适用于 Chromium 系列浏览器）
+        String browserType = getBrowserType();
         String channel = getBrowserChannel();
-        if (channel != null && !channel.isEmpty()) {
+        if (channel != null && !channel.isEmpty() && isChromiumBased(browserType)) {
             launchOptions.setChannel(channel);
             logger.info("Browser channel: {}", channel);  // 保留浏览器channel日志，这很重要
+        } else if (channel != null && !channel.isEmpty() && !isChromiumBased(browserType)) {
+            LoggingConfigUtil.logDebugIfVerbose(logger, 
+                "Ignoring browser channel '{}' for browser type '{}' (channel only applies to Chromium-based browsers)", 
+                channel, browserType);
         }
     }
 
@@ -766,7 +790,10 @@ public class PlaywrightManager {
     }
 
     /**
-     * 获取 Browser 实例
+     * 获取 Browser 实例（支持动态浏览器切换）
+     * 
+     * 新特性：自动检测浏览器类型，不依赖Cucumber hooks
+     * 在首次访问时自动从scenario标签中提取浏览器类型并切换
      */
     public static Browser getBrowser() {
         String configId = getCurrentConfigId();
@@ -774,10 +801,23 @@ public class PlaywrightManager {
             throw new IllegalStateException("Playwright environment not initialized. Call FrameworkCore.initialize() first.");
         }
 
+        logger.info("📱 [getBrowser] Called with configId: {}", configId);
+
         Browser browser = browserInstances.get(configId);
         if (browser == null || !browser.isConnected()) {
-            initializeBrowser(configId);
-            browser = browserInstances.get(configId);
+            synchronized (PlaywrightManager.class) {
+                // 双重检查
+                browser = browserInstances.get(configId);
+                if (browser == null || !browser.isConnected()) {
+                    logger.info("🔧 [getBrowser] Initializing browser for configId: {}", configId);
+                    initializeBrowser(configId);
+                    browser = browserInstances.get(configId);
+                    logger.info("✅ [getBrowser] Browser initialized: {}",
+                        browser != null ? browser.getClass().getSimpleName() : "null");
+                }
+            }
+        } else {
+            logger.info("✅ [getBrowser] Reusing existing browser for configId: {}", configId);
         }
         return browser;
     }
@@ -1187,46 +1227,61 @@ public class PlaywrightManager {
     }
 
     /**
-     * 重启浏览器（用于重跑测试时）
+     * 重启浏览器（用于重跑测试时或浏览器类型切换）
      */
     public static synchronized void restartBrowser() {
-        String configId = getCurrentConfigId();
-        if (configId == null) {
+        String oldConfigId = getCurrentConfigId();
+        if (oldConfigId == null) {
             logger.warn("Cannot restart browser: configId is null. Browser not initialized.");
             return;
         }
 
-        LoggingConfigUtil.logInfoIfVerbose(logger, "🔄 Restarting browser for config: {}", configId);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "🔄 Restarting browser for config: {}", oldConfigId);
 
         try {
             closePage();
             closeContext();
 
-            Browser browser = browserInstances.get(configId);
-            if (browser != null && browser.isConnected()) {
-                browser.close();
-                browserInstances.remove(configId);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "Browser closed for config: {}", configId);
-            }
-
-            Playwright playwright = playwrightInstances.get(configId);
-            if (playwright != null) {
-                try {
-                    playwright.close();
-                    playwrightInstances.remove(configId);
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "Playwright instance closed for config: {}", configId);
-                } catch (Exception e) {
-                    logger.warn("Error closing Playwright instance: {}", e.getMessage());
+            // 关闭所有浏览器实例，确保没有残留的实例
+            for (Map.Entry<String, Browser> entry : browserInstances.entrySet()) {
+                Browser browser = entry.getValue();
+                if (browser != null && browser.isConnected()) {
+                    try {
+                        browser.close();
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Browser closed for config: {}", entry.getKey());
+                    } catch (Exception e) {
+                        logger.warn("Error closing browser instance for config {}: {}", entry.getKey(), e.getMessage());
+                    }
                 }
             }
+            browserInstances.clear();
 
-            initializePlaywright(configId);
-            initializeBrowser(configId);
+            // 关闭所有Playwright实例
+            for (Map.Entry<String, Playwright> entry : playwrightInstances.entrySet()) {
+                Playwright playwright = entry.getValue();
+                if (playwright != null) {
+                    try {
+                        playwright.close();
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Playwright instance closed for config: {}", entry.getKey());
+                    } catch (Exception e) {
+                        logger.warn("Error closing Playwright instance for config {}: {}", entry.getKey(), e.getMessage());
+                    }
+                }
+            }
+            playwrightInstances.clear();
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Browser restarted successfully for config: {}", configId);
+            // 生成新的 configId（此时浏览器类型可能已经更新）
+            String newConfigId = generateConfigId();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Generating new configId: {} (old was: {})", newConfigId, oldConfigId);
+
+            initializePlaywright(newConfigId);
+            initializeBrowser(newConfigId);
+            currentConfigId = newConfigId;
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Browser restarted successfully for config: {}", newConfigId);
         } catch (Exception e) {
-            logger.error("Failed to restart browser for config: {}", configId, e);
-            throw new BrowserException("Failed to restart browser for config: " + configId, e);
+            logger.error("Failed to restart browser for config: {}", oldConfigId, e);
+            throw new BrowserException("Failed to restart browser for config: " + oldConfigId, e);
         }
     }
 
@@ -1345,6 +1400,10 @@ public class PlaywrightManager {
     /**
      * Scenario 级别的清理
      * 每个 scenario 结束时调用
+     *
+     * 新设计：简化浏览器管理，不依赖Cucumber hooks
+     * - 浏览器覆盖配置会自动在下一个scenario开始时更新
+     * - 如果下一个scenario需要不同的浏览器，PlaywrightManager会自动切换
      */
     public static void cleanupForScenario() {
         LoggingConfigUtil.logDebugIfVerbose(logger, "Cleaning up for scenario...");
@@ -1365,6 +1424,10 @@ public class PlaywrightManager {
             // 只清理页面状态，不关闭 Context/Page
             cleanupPageState();
         }
+
+        // 注意：不再在这里清除浏览器覆盖配置
+        // BrowserOverrideManager的清除由AutoBrowserManagerGlue的@After hook负责
+        // 这样可以确保浏览器状态在scenario之间正确传递
     }
 
     /**
@@ -1557,9 +1620,67 @@ public class PlaywrightManager {
 
     /**
      * 获取浏览器类型
+     * 优先使用测试用例级别的覆盖配置（如果存在）
+     *
+     * @return 浏览器类型
      */
     public static String getBrowserType() {
+        // 优先级1: 检查是否有测试用例级别的浏览器覆盖
+        if (BrowserOverrideManager.hasOverride()) {
+            String overrideBrowser = BrowserOverrideManager.getEffectiveBrowserType();
+            LoggingConfigUtil.logDebugIfVerbose(logger,
+                "Using override browser type: {}", overrideBrowser);
+            return overrideBrowser;
+        }
+
+        // 优先级2: 使用配置文件中的默认值
         return FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_BROWSER_TYPE);
+    }
+
+    /**
+     * 检查是否需要重启浏览器
+     * 通过比较当前configId中的浏览器类型和期望的浏览器类型
+     *
+     * @return true 如果需要重启浏览器
+     */
+    private static boolean needsBrowserRestart() {
+        String configId = getCurrentConfigId();
+        logger.info("🔍 [needsBrowserRestart] Checking if browser restart needed...");
+        logger.info("   configId: {}", configId);
+        logger.info("   currentConfigId field: {}", currentConfigId);
+
+        if (configId == null) {
+            logger.warn("   configId is null, skipping restart check");
+            return false;
+        }
+
+        // 从configId中提取当前浏览器类型（格式：browserType_headless_channel）
+        String[] configIdParts = configId.split("_");
+        logger.info("   configId parts: {} (length: {})",
+            java.util.Arrays.toString(configIdParts), configIdParts.length);
+
+        if (configIdParts.length < 1) {
+            logger.warn("   Invalid configId format, skipping restart check");
+            return false;
+        }
+        String currentBrowserType = configIdParts[0];
+        logger.info("   Current browser type from configId: {}", currentBrowserType);
+
+        // 获取期望的浏览器类型（考虑override）
+        boolean hasOverride = BrowserOverrideManager.hasOverride();
+        String expectedBrowserType = getBrowserType();
+        logger.info("   Expected browser type: {} (hasOverride: {})",
+            expectedBrowserType, hasOverride);
+
+        // 如果类型不同，需要重启
+        if (!currentBrowserType.equalsIgnoreCase(expectedBrowserType)) {
+            logger.info("✅ [needsBrowserRestart] Browsers differ, needs restart: '{}' vs '{}'",
+                currentBrowserType, expectedBrowserType);
+            return true;
+        }
+
+        logger.info("✅ [needsBrowserRestart] Browsers match, no restart needed");
+        return false;
     }
 
     /**
@@ -1602,6 +1723,19 @@ public class PlaywrightManager {
      */
     public static String getBrowserChannel() {
         return FrameworkConfigManager.getString(FrameworkConfig.PLAYWRIGHT_BROWSER_CHANNEL);
+    }
+
+    /**
+     * 判断浏览器类型是否是 Chromium 系列
+     * Chromium 系列浏览器包括：chromium, chrome, edge
+     */
+    private static boolean isChromiumBased(String browserType) {
+        if (browserType == null) {
+            return false;
+        }
+        return browserType.equalsIgnoreCase("chromium") ||
+               browserType.equalsIgnoreCase("chrome") ||
+               browserType.equalsIgnoreCase("edge");
     }
 
     /**

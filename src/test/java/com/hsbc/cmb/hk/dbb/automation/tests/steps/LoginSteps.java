@@ -1,7 +1,7 @@
 package com.hsbc.cmb.hk.dbb.automation.tests.steps;
 
 import com.hsbc.cmb.hk.dbb.automation.framework.session.SessionManager;
-import com.hsbc.cmb.hk.dbb.automation.page.factory.PageObjectFactory;
+import com.hsbc.cmb.hk.dbb.automation.framework.page.factory.PageObjectFactory;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.HomePage;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.LoginPage;
 import com.hsbc.cmb.hk.dbb.automation.tests.utils.BDDUtils;
@@ -25,12 +25,12 @@ public class LoginSteps {
      * Logon to DBB environment as specified user with session management
      *
      * This method implements skip login functionality:
-     * 1. Check if user is already logged in (via SessionManager with env+username as key)
+     * 1. Check if user is already logged in (via SessionManager with env+username+browser as key)
      * 2. If logged in, restore session and navigate to URL
      * 3. If not logged in, perform full login flow and save session
      *
-     * Session key format: env_username (e.g., O88_SIT1_AABBCCDD)
-     * This allows the same username to have different sessions in different environments
+     * Session key format: env_username_browser (e.g., O88_SIT1_AABBCCDD_chromium)
+     * This allows the same username to have different sessions in different environments and browsers
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1, O38_SIT1)
      * @param username Username (e.g., AABBCCDD, ABCDEW)
@@ -40,10 +40,11 @@ public class LoginSteps {
         BDDUtils logonDBBInfo = BDDUtils.getLogonDBBInfo(env, username);
         BDDUtils.setCurrentLoginInfo(logonDBBInfo);
         currentUrl = BDDUtils.getCurrentUrl();
-        String sessionKey = env + "_" + username;
 
-        // Check if user is already logged in (based on env+username)
+        // Check if user is already logged in (based on env+username, browser auto-detected)
         if (SessionManager.isUserLoggedIn(env, username)) {
+            String browserType = com.hsbc.cmb.hk.dbb.automation.framework.config.BrowserOverrideManager.getEffectiveBrowserType();
+            String sessionKey = env + "_" + username + "_" + browserType;
             System.out.println("User already logged in: " + sessionKey + ", restoring session...");
             // Restore session and navigate to home page directly
             boolean restored = SessionManager.restoreSession(env, username);
@@ -79,7 +80,8 @@ public class LoginSteps {
      */
     private void performLogin(String env) {
         String username = BDDUtils.getCurrentUsername();
-        String sessionKey = env + "_" + username;
+        String browserType = com.hsbc.cmb.hk.dbb.automation.framework.config.BrowserOverrideManager.getEffectiveBrowserType();
+        String sessionKey = env + "_" + username + "_" + browserType;
         System.out.println("Performing login for: " + sessionKey);
 
         loginPage.navigateTo(currentUrl);

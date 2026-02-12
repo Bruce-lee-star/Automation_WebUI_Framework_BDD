@@ -139,6 +139,13 @@
             <version>${gson.version}</version>
         </dependency>
 
+        <!-- ==================== Reflection API ==================== -->
+        <dependency>
+            <groupId>org.reflections</groupId>
+            <artifactId>reflections</artifactId>
+            <version>0.10.2</version>
+        </dependency>
+
         <!-- ==================== Logging Framework ==================== -->
         <dependency>
             <groupId>org.slf4j</groupId>

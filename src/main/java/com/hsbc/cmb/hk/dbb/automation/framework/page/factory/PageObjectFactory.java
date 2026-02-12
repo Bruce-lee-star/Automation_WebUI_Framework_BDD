@@ -1,4 +1,4 @@
-package com.hsbc.cmb.hk.dbb.automation.page.factory;
+package com.hsbc.cmb.hk.dbb.automation.framework.page.factory;
 
 import com.hsbc.cmb.hk.dbb.automation.framework.exceptions.ConfigurationException;
 import org.slf4j.Logger;

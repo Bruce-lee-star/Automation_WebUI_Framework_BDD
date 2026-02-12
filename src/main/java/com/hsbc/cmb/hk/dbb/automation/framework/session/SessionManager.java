@@ -2,6 +2,7 @@ package com.hsbc.cmb.hk.dbb.automation.framework.session;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.hsbc.cmb.hk.dbb.automation.framework.config.BrowserOverrideManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.config.FrameworkConfig;
 import com.hsbc.cmb.hk.dbb.automation.framework.config.FrameworkConfigManager;
 import com.microsoft.playwright.BrowserContext;
@@ -34,11 +35,13 @@ import java.util.Map;
  * 5. Method overloading for backward compatibility
  * 6. Configurable session timeout
  *
- * Session Key Formats:
- * - Recommended: env_username (e.g., O88_SIT1_AABBCCDD, O63_SIT1_AABBCCDD)
+ * Session Key Formats (method overloading):
+ * - Full: env_username_browser (e.g., O88_SIT1_AABBCCDD_chromium)
+ * - Recommended: env_username (e.g., O88_SIT1_AABBCCDD)
  * - Legacy: username only (e.g., AABBCCDD)
  *
  * Using env+username allows same username to have different sessions in different environments
+ * Using browser type allows same username to have different sessions across browsers
  *
  * Session Configuration (in serenity.conf):
  * - playwright.no.login.session.timeout.minutes: Session timeout in minutes (default: 5)
@@ -119,15 +122,16 @@ public class SessionManager {
     }
     
     /**
-     * Save user session to file
-     * Uses env+username as session key (recommended)
+     * Save user session to file with explicit browser type
+     * Uses env+username+browser as session key (full format)
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
      * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox)
      * @param homeUrl Home page URL after successful login
      */
-    public static void saveSession(String env, String username, String homeUrl) {
-        String sessionKey = generateSessionKey(env, username);
+    public static void saveSession(String env, String username, String browser, String homeUrl) {
+        String sessionKey = generateSessionKey(env, username, browser);
         try {
             UserSession session = activeSessions.get(sessionKey);
             if (session == null) {
@@ -194,6 +198,18 @@ public class SessionManager {
     }
 
     /**
+     * Save user session to file
+     * Uses env+username as session key (auto-detect browser)
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @param homeUrl Home page URL after successful login
+     */
+    public static void saveSession(String env, String username, String homeUrl) {
+        saveSession(env, username, null, homeUrl);
+    }
+
+    /**
      * Save user session to file (legacy - uses username only as key)
      * Backward compatible version for existing code
      *
@@ -201,81 +217,20 @@ public class SessionManager {
      * @param homeUrl Home page URL after successful login
      */
     public static void saveSession(String username, String homeUrl) {
-        try {
-            UserSession session = activeSessions.get(username);
-            if (session == null) {
-                LoggingConfigUtil.logWarnIfVerbose(logger, "No active session found for user: {}", username);
-                return;
-            }
-
-            // Set home URL and update access time
-            session.setHomeUrl(homeUrl);
-            session.updateAccessTime();
-
-            // Get cookies from current context
-            BrowserContext context = PlaywrightManager.getContext();
-            List<Cookie> cookies = context.cookies();
-
-            // Convert to serializable Map
-            for (Cookie cookie : cookies) {
-                Map<String, Object> cookieMap = new HashMap<>();
-                cookieMap.put("name", cookie.name);
-                cookieMap.put("value", cookie.value);
-                cookieMap.put("domain", cookie.domain);
-                cookieMap.put("path", cookie.path);
-                cookieMap.put("expires", cookie.expires);
-                cookieMap.put("httpOnly", cookie.httpOnly);
-                cookieMap.put("secure", cookie.secure);
-                cookieMap.put("sameSite", cookie.sameSite);
-                session.addCookie(cookieMap);
-            }
-
-            // Save localStorage
-            try {
-                Page page = PlaywrightManager.getPage();
-                if (page != null) {
-                    Object localStorageObj = page.evaluate("() => { const data = {}; for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); data[key] = localStorage.getItem(key); } return data; }");
-                    @SuppressWarnings("unchecked")
-                    Map<String, String> localStorageData = (Map<String, String>) localStorageObj;
-                    for (Map.Entry<String, String> entry : localStorageData.entrySet()) {
-                        session.setLocalStorageItem(entry.getKey(), entry.getValue());
-                    }
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Saved {} localStorage items for user: {}", localStorageData.size(), username);
-                }
-            } catch (Exception e) {
-                logger.warn("Failed to save localStorage for user: {} (continuing without localStorage)", username, e);
-            }
-
-            // Save to file (JSON format with UTF-8 encoding)
-            Path sessionDir = Paths.get(SESSION_DIR);
-            if (!Files.exists(sessionDir)) {
-                Files.createDirectories(sessionDir);
-            }
-
-            String sessionFile = sessionDir.resolve(username + ".session").toString();
-            try (Writer writer = new OutputStreamWriter(
-                    new BufferedOutputStream(new FileOutputStream(sessionFile), 8192),
-                    StandardCharsets.UTF_8)) {
-                GSON.toJson(session, writer);
-            }
-
-            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session saved for user: {} to {}", username, sessionFile);
-        } catch (Exception e) {
-            logger.error("Failed to save session for user: {}", username, e);
-            throw new RuntimeException("Failed to save session", e);
-        }
+        saveSession(null, username, null, homeUrl);
     }
-    
+
     /**
-     * Load user session
-     * Uses env+username as session key (recommended)
+     * Load user session with explicit browser type
+     * Uses env+username+browser as session key (full format)
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
      * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox)
      * @return User session, return null if not exists
      */
-    public static UserSession loadSession(String env, String username) {
-        String sessionKey = generateSessionKey(env, username);
+    public static UserSession loadSession(String env, String username, String browser) {
+        String sessionKey = generateSessionKey(env, username, browser);
         try {
             Path sessionFile = Paths.get(SESSION_DIR, sessionKey + ".session");
 
@@ -302,6 +257,18 @@ public class SessionManager {
     }
 
     /**
+     * Load user session
+     * Uses env+username as session key (auto-detect browser)
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @return User session, return null if not exists
+     */
+    public static UserSession loadSession(String env, String username) {
+        return loadSession(env, username, null);
+    }
+
+    /**
      * Load user session (legacy - uses username only as key)
      * Backward compatible version for existing code
      *
@@ -309,43 +276,22 @@ public class SessionManager {
      * @return User session, return null if not exists
      */
     public static UserSession loadSession(String username) {
-        try {
-            Path sessionFile = Paths.get(SESSION_DIR, username + ".session");
-
-            if (!Files.exists(sessionFile)) {
-                LoggingConfigUtil.logInfoIfVerbose(logger, "No saved session found for user: {}", username);
-                return null;
-            }
-
-            try (Reader reader = new InputStreamReader(
-                    new BufferedInputStream(new FileInputStream(sessionFile.toString()), 8192),
-                    StandardCharsets.UTF_8)) {
-                UserSession session = GSON.fromJson(reader, UserSession.class);
-
-                // Add session to active sessions
-                activeSessions.put(username, session);
-
-                LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session loaded for user: {}", username);
-                return session;
-            }
-        } catch (Exception e) {
-            logger.error("Failed to load session for user: {}", username, e);
-            return null;
-        }
+        return loadSession(null, username, null);
     }
     
     /**
-     * Restore session to current context
-     * Uses env+username as session key (recommended)
+     * Restore session to current context with explicit browser type
+     * Uses env+username+browser as session key (full format)
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
      * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox)
      * @return Return true if successfully restored, otherwise return false
      */
-    public static boolean restoreSession(String env, String username) {
-        String sessionKey = generateSessionKey(env, username);
+    public static boolean restoreSession(String env, String username, String browser) {
+        String sessionKey = generateSessionKey(env, username, browser);
         try {
-            UserSession session = loadSession(env, username);
+            UserSession session = loadSession(env, username, browser);
             if (session == null || !session.isLoggedIn()) {
                 return false;
             }
@@ -407,6 +353,18 @@ public class SessionManager {
     }
 
     /**
+     * Restore session to current context
+     * Uses env+username as session key (auto-detect browser)
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @return Return true if successfully restored, otherwise return false
+     */
+    public static boolean restoreSession(String env, String username) {
+        return restoreSession(env, username, null);
+    }
+
+    /**
      * Restore session to current context (legacy - uses username only as key)
      * Backward compatible version for existing code
      *
@@ -414,84 +372,38 @@ public class SessionManager {
      * @return Return true if successfully restored, otherwise return false
      */
     public static boolean restoreSession(String username) {
-        try {
-            UserSession session = loadSession(username);
-            if (session == null || !session.isLoggedIn()) {
-                return false;
-            }
-
-            BrowserContext context = PlaywrightManager.getContext();
-
-            // Restore cookies
-            List<Map<String, Object>> cookies = session.getCookies();
-            for (Map<String, Object> cookieMap : cookies) {
-                context.addCookies(List.of(new Cookie(
-                    (String) cookieMap.get("name"),
-                    (String) cookieMap.get("value")
-                ).setDomain((String) cookieMap.get("domain"))
-                 .setPath((String) cookieMap.get("path"))
-                 .setExpires((Double) cookieMap.get("expires"))
-                 .setHttpOnly((Boolean) cookieMap.get("httpOnly"))
-                 .setSecure((Boolean) cookieMap.get("secure"))
-                 .setSameSite(SameSiteAttribute.valueOf(
-                     cookieMap.get("sameSite").toString()
-                 ))
-                ));
-            }
-
-            // Restore localStorage
-            Map<String, String> localStorage = session.getLocalStorage();
-            if (localStorage != null && !localStorage.isEmpty()) {
-                try {
-                    // Create script to set localStorage items
-                    StringBuilder scriptBuilder = new StringBuilder();
-                    scriptBuilder.append("(() => {");
-                    // Clear existing localStorage
-                    scriptBuilder.append("localStorage.clear();");
-                    // Set new localStorage items
-                    for (Map.Entry<String, String> entry : localStorage.entrySet()) {
-                        String key = escapeJsString(entry.getKey());
-                        String value = escapeJsString(entry.getValue());
-                        scriptBuilder.append(String.format("localStorage.setItem('%s', '%s');", key, value));
-                    }
-                    scriptBuilder.append("})();");
-
-                    // Execute the script in the context
-                    context.addInitScript(scriptBuilder.toString());
-
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Restored {} localStorage items for user: {}", localStorage.size(), username);
-                } catch (Exception e) {
-                    logger.warn("Failed to restore localStorage for user: {} (continuing without localStorage)", username, e);
-                }
-            }
-
-            // Update access time to extend session validity
-            session.updateAccessTime();
-
-            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session restored for user: {}", username);
-            return true;
-        } catch (Exception e) {
-            logger.error("Failed to restore session for user: {}", username, e);
-            return false;
-        }
+        return restoreSession(null, username, null);
     }
     
     /**
-     * Create or get user session
-     * Uses env+username as session key (recommended)
+     * Create or get user session with explicit browser type
+     * Uses env+username+browser as session key (full format)
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
      * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox)
      * @return User session
      */
-    public static UserSession getOrCreateSession(String env, String username) {
-        String sessionKey = generateSessionKey(env, username);
+    public static UserSession getOrCreateSession(String env, String username, String browser) {
+        String sessionKey = generateSessionKey(env, username, browser);
         UserSession session = activeSessions.get(sessionKey);
         if (session == null) {
             session = new UserSession(sessionKey);
             activeSessions.put(sessionKey, session);
         }
         return session;
+    }
+
+    /**
+     * Create or get user session
+     * Uses env+username as session key (auto-detect browser)
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @return User session
+     */
+    public static UserSession getOrCreateSession(String env, String username) {
+        return getOrCreateSession(env, username, null);
     }
 
     /**
@@ -502,26 +414,33 @@ public class SessionManager {
      * @return User session
      */
     public static UserSession getOrCreateSession(String username) {
-        UserSession session = activeSessions.get(username);
-        if (session == null) {
-            session = new UserSession(username);
-            activeSessions.put(username, session);
-        }
-        return session;
+        return getOrCreateSession(null, username, null);
+    }
+
+    /**
+     * Mark user as logged in with explicit browser type
+     * Uses env+username+browser as session key (full format)
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox)
+     */
+    public static void markUserLoggedIn(String env, String username, String browser) {
+        String sessionKey = generateSessionKey(env, username, browser);
+        UserSession session = getOrCreateSession(env, username, browser);
+        session.setLoggedIn(true);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✅ User marked as logged in: {}", sessionKey);
     }
 
     /**
      * Mark user as logged in
-     * Uses env+username as session key (recommended)
+     * Uses env+username as session key (auto-detect browser)
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
      * @param username Username
      */
     public static void markUserLoggedIn(String env, String username) {
-        String sessionKey = generateSessionKey(env, username);
-        UserSession session = getOrCreateSession(env, username);
-        session.setLoggedIn(true);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✅ User marked as logged in: {}", sessionKey);
+        markUserLoggedIn(env, username, null);
     }
 
     /**
@@ -531,20 +450,19 @@ public class SessionManager {
      * @param username Username
      */
     public static void markUserLoggedIn(String username) {
-        UserSession session = getOrCreateSession(username);
-        session.setLoggedIn(true);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✅ User marked as logged in: {}", username);
+        markUserLoggedIn(null, username, null);
     }
     
     /**
-     * Clear user session
-     * Uses env+username as session key (recommended)
+     * Clear user session with explicit browser type
+     * Uses env+username+browser as session key (full format)
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
      * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox)
      */
-    public static void clearSession(String env, String username) {
-        String sessionKey = generateSessionKey(env, username);
+    public static void clearSession(String env, String username, String browser) {
+        String sessionKey = generateSessionKey(env, username, browser);
         try {
             activeSessions.remove(sessionKey);
 
@@ -559,42 +477,44 @@ public class SessionManager {
     }
 
     /**
+     * Clear user session
+     * Uses env+username as session key (auto-detect browser)
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     */
+    public static void clearSession(String env, String username) {
+        clearSession(env, username, null);
+    }
+
+    /**
      * Clear user session (legacy - uses username only as key)
      * Backward compatible version for existing code
      *
      * @param username Username
      */
     public static void clearSession(String username) {
-        try {
-            activeSessions.remove(username);
-
-            Path sessionFile = Paths.get(SESSION_DIR, username + ".session");
-            if (Files.exists(sessionFile)) {
-                Files.delete(sessionFile);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "🗑️ Session cleared for user: {}", username);
-            }
-        } catch (Exception e) {
-            logger.error("Failed to clear session for user: {}", username, e);
-        }
+        clearSession(null, username, null);
     }
 
     /**
-     * Check if user is logged in (via session file)
-     * Uses env+username as session key (recommended)
+     * Check if user is logged in with explicit browser type
+     * Uses env+username+browser as session key (full format)
      * Checks both session existence and expiration
      *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
      * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox)
      * @return Return true if user is logged in and session is not expired
      */
-    public static boolean isUserLoggedIn(String env, String username) {
-        String sessionKey = generateSessionKey(env, username);
+    public static boolean isUserLoggedIn(String env, String username, String browser) {
+        String sessionKey = generateSessionKey(env, username, browser);
         Path sessionFile = Paths.get(SESSION_DIR, sessionKey + ".session");
         if (!Files.exists(sessionFile)) {
             return false;
         }
 
-        UserSession session = loadSession(env, username);
+        UserSession session = loadSession(env, username, browser);
         if (session == null || !session.isLoggedIn()) {
             return false;
         }
@@ -605,11 +525,24 @@ public class SessionManager {
                 "Session expired for session key: {} (last accessed: {} minutes ago)",
                 sessionKey, SESSION_TIMEOUT_MINUTES);
             // Clear expired session
-            clearSession(env, username);
+            clearSession(env, username, browser);
             return false;
         }
 
         return true;
+    }
+
+    /**
+     * Check if user is logged in (via session file)
+     * Uses env+username as session key (auto-detect browser)
+     * Checks both session existence and expiration
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @return Return true if user is logged in and session is not expired
+     */
+    public static boolean isUserLoggedIn(String env, String username) {
+        return isUserLoggedIn(env, username, null);
     }
 
     /**
@@ -621,27 +554,7 @@ public class SessionManager {
      * @return Return true if user is logged in and session is not expired
      */
     public static boolean isUserLoggedIn(String username) {
-        Path sessionFile = Paths.get(SESSION_DIR, username + ".session");
-        if (!Files.exists(sessionFile)) {
-            return false;
-        }
-
-        UserSession session = loadSession(username);
-        if (session == null || !session.isLoggedIn()) {
-            return false;
-        }
-
-        // Check if session is expired
-        if (session.isExpired(SESSION_TIMEOUT_MINUTES)) {
-            LoggingConfigUtil.logInfoIfVerbose(logger,
-                "Session expired for user: {} (last accessed: {} minutes ago)",
-                username, SESSION_TIMEOUT_MINUTES);
-            // Clear expired session
-            clearSession(username);
-            return false;
-        }
-
-        return true;
+        return isUserLoggedIn(null, username, null);
     }
     
     /**
@@ -669,15 +582,45 @@ public class SessionManager {
     }
 
     /**
-     * Generate session key from environment and username
-     * Session key format: env_username (e.g., O88_SIT1_AABBCCDD)
+     * Generate session key from environment, username and browser type
+     * Session key formats (supports multiple parameter combinations):
+     * - env_username_browser (full format, e.g., O88_SIT1_AABBCCDD_chromium)
+     * - env_username (auto-detect browser, e.g., O88_SIT1_AABBCCDD)
+     * - username (legacy, auto env and browser, e.g., AABBCCDD)
      *
-     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1), can be null
+     * @param username Username
+     * @param browser Browser type (e.g., chromium, firefox), can be null
+     * @return Session key
+     */
+    private static String generateSessionKey(String env, String username, String browser) {
+        // Auto-detect browser type if not provided
+        if (browser == null) {
+            browser = BrowserOverrideManager.getEffectiveBrowserType();
+        }
+        
+        return env + "_" + username + "_" + browser;
+    }
+
+    /**
+     * Generate session key from environment and username (auto-detect browser)
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1), can be null
      * @param username Username
      * @return Session key
      */
     private static String generateSessionKey(String env, String username) {
-        return env + "_" + username;
+        return generateSessionKey(env, username, null);
+    }
+
+    /**
+     * Generate session key from username only (legacy - auto env and browser)
+     *
+     * @param username Username
+     * @return Session key
+     */
+    private static String generateSessionKey(String username) {
+        return generateSessionKey(null, username, null);
     }
 
     /**

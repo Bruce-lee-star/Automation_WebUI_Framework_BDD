@@ -1,4 +1,4 @@
-package com.hsbc.cmb.hk.dbb.automation.page.base.impl;
+package com.hsbc.cmb.hk.dbb.automation.framework.page.base.impl;
 
 import com.microsoft.playwright.Page;
 import com.hsbc.cmb.hk.dbb.automation.framework.utils.LoggingConfigUtil;
@@ -7,7 +7,7 @@ import com.hsbc.cmb.hk.dbb.automation.framework.exceptions.ConfigurationExceptio
 import com.hsbc.cmb.hk.dbb.automation.framework.exceptions.ElementException;
 import com.hsbc.cmb.hk.dbb.automation.framework.exceptions.ElementNotClickableException;
 import com.hsbc.cmb.hk.dbb.automation.framework.exceptions.TimeoutException;
-import com.hsbc.cmb.hk.dbb.automation.page.base.BasePage;
+import com.hsbc.cmb.hk.dbb.automation.framework.page.base.BasePage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

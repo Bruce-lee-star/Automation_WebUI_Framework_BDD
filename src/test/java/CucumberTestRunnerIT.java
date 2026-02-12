@@ -6,7 +6,8 @@ import org.junit.runner.RunWith;
 @CucumberOptions(
         features = "src/test/resources/features",
         glue = {
-            "com.hsbc.cmb.dbb.hk.automation.tests.glue"
+            "com.hsbc.cmb.hk.dbb.automation.tests.glue",
+            "com.hsbc.cmb.hk.dbb.automation.hooks"
         },
         plugin = {
             "pretty",
@@ -16,7 +17,7 @@ import org.junit.runner.RunWith;
         },
         monochrome = true,
         dryRun = false,
-        tags = "@test1"
+        tags = "@test11"
 )
 public class CucumberTestRunnerIT {
 
