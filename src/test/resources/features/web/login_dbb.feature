@@ -1,4 +1,4 @@
-@test11
+@test
 Feature: testing logon - 1
 
   Scenario: testing logon to dbb-1

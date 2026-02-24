@@ -14,8 +14,7 @@
         <maven.compiler.target>11</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-
-        <!-- 版本管理 - 尝试使用原始版本但强制更新依赖 -->
+        <!-- 版本管理 - 保持Java 11兼容，使用Serenity 4.1.3 -->
         <serenity.version>4.1.3</serenity.version>
         <serenity.cucumber.version>4.1.3</serenity.cucumber.version>
         <playwright.version>1.38.0</playwright.version>
@@ -27,12 +26,13 @@
         <gson.version>2.10.1</gson.version>
 
         <!-- 新增：API 测试相关依赖版本 -->
-        <json.path.version>2.7.0</json.path.version>
-        <json.version>20231013</json.version>
-        <spring.version>5.3.30</spring.version>
-        <commons.lang3.version>3.12.0</commons.lang3.version>
+        <json.path.version>2.9.0</json.path.version>
+        <json.version>20240303</json.version>
+        <!-- Spring版本 - Java 11兼容版本 -->
+        <spring.version>5.3.39</spring.version>
+        <commons.lang3.version>3.17.0</commons.lang3.version>
 
-        <!-- 日志框架 -->
+        <!-- 日志框架 - Java 11兼容版本 -->
         <slf4j.version>1.7.36</slf4j.version>
         <logback.version>1.2.12</logback.version>
 
@@ -40,6 +40,10 @@
         <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.0.0-M9</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.0.0-M9</maven-failsafe-plugin.version>
+
+        <!-- 测试配置 -->
+        <rerunFailingTestsCount>0</rerunFailingTestsCount>
+        <tags></tags>
     </properties>
 
     <dependencies>
@@ -207,53 +211,11 @@
             <version>${logback.version}</version>
         </dependency>
 
-        <!-- ==================== JSON Processing ==================== -->
-        <dependency>
-            <groupId>com.google.code.gson</groupId>
-            <artifactId>gson</artifactId>
-            <version>${gson.version}</version>
-        </dependency>
-
     <!-- 数据库连接池 -->
         <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
             <version>5.0.1</version>
-        </dependency>
-        
-        <!-- MySQL JDBC驱动 -->
-        <dependency>
-            <groupId>mysql</groupId>
-            <artifactId>mysql-connector-java</artifactId>
-            <version>8.0.33</version>
-        </dependency>
-        
-        <!-- PostgreSQL JDBC驱动 -->
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <version>42.7.1</version>
-        </dependency>
-        
-        <!-- Oracle JDBC驱动 -->
-        <dependency>
-            <groupId>com.oracle.database.jdbc</groupId>
-            <artifactId>ojdbc8</artifactId>
-            <version>19.17.0.0</version>
-        </dependency>
-        
-        <!-- SQL Server JDBC驱动 -->
-        <dependency>
-            <groupId>com.microsoft.sqlserver</groupId>
-            <artifactId>mssql-jdbc</artifactId>
-            <version>12.4.2.jre8</version>
-        </dependency>
-        
-        <!-- DB2 JDBC驱动 -->
-        <dependency>
-            <groupId>com.ibm.db2</groupId>
-            <artifactId>jcc</artifactId>
-            <version>11.5.7.0</version>
         </dependency>
         
     </dependencies>
@@ -333,55 +295,6 @@
                 <groupId>net.serenity-bdd.maven.plugins</groupId>
                 <artifactId>serenity-maven-plugin</artifactId>
                 <version>${serenity.version}</version>
-                <dependencies>
-                    <dependency>
-                        <groupId>net.serenity-bdd</groupId>
-                        <artifactId>serenity-core</artifactId>
-                        <version>${serenity.version}</version>
-                    </dependency>
-                <!-- 数据库连接池 -->
-        <dependency>
-            <groupId>com.zaxxer</groupId>
-            <artifactId>HikariCP</artifactId>
-            <version>5.0.1</version>
-        </dependency>
-        
-        <!-- MySQL JDBC驱动 -->
-        <dependency>
-            <groupId>mysql</groupId>
-            <artifactId>mysql-connector-java</artifactId>
-            <version>8.0.33</version>
-        </dependency>
-        
-        <!-- PostgreSQL JDBC驱动 -->
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <version>42.7.1</version>
-        </dependency>
-        
-        <!-- Oracle JDBC驱动 -->
-        <dependency>
-            <groupId>com.oracle.database.jdbc</groupId>
-            <artifactId>ojdbc8</artifactId>
-            <version>19.17.0.0</version>
-        </dependency>
-        
-        <!-- SQL Server JDBC驱动 -->
-        <dependency>
-            <groupId>com.microsoft.sqlserver</groupId>
-            <artifactId>mssql-jdbc</artifactId>
-            <version>12.4.2.jre8</version>
-        </dependency>
-        
-        <!-- DB2 JDBC驱动 -->
-        <dependency>
-            <groupId>com.ibm.db2</groupId>
-            <artifactId>jcc</artifactId>
-            <version>11.5.7.0</version>
-        </dependency>
-        
-    </dependencies>
                 <executions>
                     <execution>
                         <id>serenity-reports</id>
@@ -392,7 +305,6 @@
                         <configuration>
                             <outputDirectory>${project.build.directory}/site/serenity</outputDirectory>
                             <!-- 禁用新的单页HTML和JSON摘要报告，保持与Serenity BDD 2.0.84一致 -->
-                            <reports></reports>
                         </configuration>
                     </execution>
                 </executions>

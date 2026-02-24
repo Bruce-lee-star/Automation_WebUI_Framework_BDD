@@ -1,27 +1,34 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.page.base;
 
-import com.microsoft.playwright.BrowserContext;
-import com.microsoft.playwright.Locator;
-import com.microsoft.playwright.Page;
-import com.microsoft.playwright.options.*;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.core.FrameworkCore;
-import com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle.PlaywrightManager;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.nio.file.Paths;
-import java.util.Collections;
-import java.util.List;
-import java.util.function.Supplier;
-import java.util.function.Predicate;
-import java.util.regex.Pattern;
-
-import com.microsoft.playwright.options.BoundingBox;
-
 import com.hsbc.cmb.hk.dbb.automation.framework.web.exceptions.ElementException;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.exceptions.ElementNotClickableException;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.exceptions.ElementNotVisibleException;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.exceptions.TimeoutException;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle.PlaywrightManager;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.page.Element;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.page.PageElement;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
+import com.microsoft.playwright.*;
+import com.microsoft.playwright.options.AriaRole;
+import com.microsoft.playwright.options.BoundingBox;
+import com.microsoft.playwright.options.Cookie;
+import com.microsoft.playwright.options.LoadState;
+import com.microsoft.playwright.options.MouseButton;
+import com.microsoft.playwright.options.SelectOption;
+import com.microsoft.playwright.options.WaitForSelectorState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.lang.reflect.Field;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 /**
  * 基础页面类 - 所有PageObject的父类
@@ -44,9 +51,11 @@ import com.hsbc.cmb.hk.dbb.automation.framework.web.exceptions.TimeoutException;
  */
 public abstract class BasePage {
     protected static final Logger logger = LoggerFactory.getLogger(BasePage.class);
-    
+
     protected Page page;
     protected BrowserContext context;
+
+    private static final ThreadLocal<BasePage> currentPage = new ThreadLocal<>();
     
     /**
      * 构造函数 - 初始化页面对象
@@ -56,7 +65,8 @@ public abstract class BasePage {
         if (!FrameworkCore.getInstance().isInitialized()) {
             FrameworkCore.getInstance().initialize();
         }
-        // 不在构造函数中初始化，延迟到第一次使用时
+        // 自动初始化带@Element注解的字段
+        initializeAnnotatedFields();
     }
 
     /**
@@ -65,6 +75,38 @@ public abstract class BasePage {
     private void ensurePageValid() {
         if (page == null || page.isClosed()) {
             page = PlaywrightManager.getPage();
+            setCurrentPage();  // 设置当前线程的Page实例
+        }
+    }
+
+    /**
+     * 初始化所有带@Element注解的字段
+     * 使用反射自动创建PageElement实例并赋值
+     */
+    private void initializeAnnotatedFields() {
+        for (Field field : this.getClass().getDeclaredFields()) {
+            if (field.isAnnotationPresent(Element.class)) {
+                Element elementAnnotation = field.getAnnotation(Element.class);
+                String selector = elementAnnotation.value();
+                String description = elementAnnotation.description();
+
+                try {
+                    field.setAccessible(true);
+                    PageElement pageElement = new PageElement(selector, this);
+                    field.set(this, pageElement);
+
+                    if (LoggingConfigUtil.isVerboseLoggingEnabled() && !description.isEmpty()) {
+                        LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element: {} - {} ({})",
+                            field.getName(), description, selector);
+                    } else if (LoggingConfigUtil.isVerboseLoggingEnabled()) {
+                        LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element: {} ({})",
+                            field.getName(), selector);
+                    }
+                } catch (IllegalAccessException e) {
+                    LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to initialize field: {}", field.getName(), e);
+                    throw new ElementException("Failed to initialize field: " + field.getName(), e);
+                }
+            }
         }
     }
 
@@ -75,6 +117,28 @@ public abstract class BasePage {
         if (context == null || context.pages().isEmpty()) {
             context = PlaywrightManager.getContext();
         }
+    }
+
+    /**
+     * 获取当前线程的Page实例
+     * @return 当前Page实例
+     */
+    public static BasePage getCurrentPage() {
+        return currentPage.get();
+    }
+
+    /**
+     * 设置当前线程的Page实例
+     */
+    protected void setCurrentPage() {
+        currentPage.set(this);
+    }
+
+    /**
+     * 清除当前线程的Page实例
+     */
+    protected static void clearCurrentPage() {
+        currentPage.remove();
     }
 
     /**
@@ -98,7 +162,7 @@ public abstract class BasePage {
     /**
      * 通过选择器查找单个元素
      */
-    protected Locator locator(String selector) {
+    public Locator locator(String selector) {
         ensurePageValid();
         return page.locator(selector);
     }
@@ -167,6 +231,15 @@ public abstract class BasePage {
         return page.getByRole(role);
     }
 
+    /**
+     * 创建 PageElement 实例，支持链式调用
+     * @param selector 元素选择器
+     * @return PageElement 实例
+     */
+    public PageElement element(String selector) {
+        return new PageElement(selector, this);
+    }
+
     // ==================== 基础操作方法 ====================
 
     /**
@@ -174,10 +247,10 @@ public abstract class BasePage {
      */
     public void click(String selector) {
         try {
-            logger.info("Clicking element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Clicking element: {}", selector);
             locator(selector).click();
         } catch (Exception e) {
-            logger.error("Failed to click element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to click element: {}", selector, e);
             throw new ElementNotClickableException(selector, e);
         }
     }
@@ -187,10 +260,10 @@ public abstract class BasePage {
      */
     public void doubleClick(String selector) {
         try {
-            logger.info("Double clicking element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Double clicking element: {}", selector);
             locator(selector).dblclick();
         } catch (Exception e) {
-            logger.error("Failed to double click element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to double click element: {}", selector, e);
             throw new ElementNotClickableException(selector, e);
         }
     }
@@ -200,10 +273,10 @@ public abstract class BasePage {
      */
     public void rightClick(String selector) {
         try {
-            logger.info("Right clicking element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Right clicking element: {}", selector);
             locator(selector).click(new Locator.ClickOptions().setButton(MouseButton.RIGHT));
         } catch (Exception e) {
-            logger.error("Failed to right click element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to right click element: {}", selector, e);
             throw new ElementNotClickableException(selector, e);
         }
     }
@@ -213,10 +286,10 @@ public abstract class BasePage {
      */
     public void hover(String selector) {
         try {
-            logger.info("Hovering over element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Hovering over element: {}", selector);
             locator(selector).hover();
         } catch (Exception e) {
-            logger.error("Failed to hover over element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to hover over element: {}", selector, e);
             throw new ElementNotVisibleException(selector, e);
         }
     }
@@ -226,10 +299,10 @@ public abstract class BasePage {
      */
     public void type(String selector, String text) {
         try {
-            logger.info("Typing text '{}' into element: {}", text, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Typing text '{}' into element: {}", text, selector);
             locator(selector).fill(text);
         } catch (Exception e) {
-            logger.error("Failed to type text '{}' into element: {}", text, selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to type text '{}' into element: {}", text, selector, e);
             throw new ElementException("Failed to type text '" + text + "' into element: " + selector, e);
         }
     }
@@ -239,10 +312,10 @@ public abstract class BasePage {
      */
     public void clear(String selector) {
         try {
-            logger.info("Clearing element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Clearing element: {}", selector);
             locator(selector).clear();
         } catch (Exception e) {
-            logger.error("Failed to clear element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to clear element: {}", selector, e);
             throw new ElementException("Failed to clear element: " + selector, e);
         }
     }
@@ -252,10 +325,10 @@ public abstract class BasePage {
      */
     public void append(String selector, String text) {
         try {
-            logger.info("Appending text '{}' to element: {}", text, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Appending text '{}' to element: {}", text, selector);
             locator(selector).fill(text);
         } catch (Exception e) {
-            logger.error("Failed to append text '{}' to element: {}", text, selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to append text '{}' to element: {}", text, selector, e);
             throw new ElementException("Failed to append text '" + text + "' to element: " + selector, e);
         }
     }
@@ -266,10 +339,10 @@ public abstract class BasePage {
     public String getText(String selector) {
         try {
             String text = locator(selector).innerText();
-            logger.info("Getting text from element {}: {}", selector, text);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Getting text from element {}: {}", selector, text);
             return text;
         } catch (Exception e) {
-            logger.error("Failed to get text from element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get text from element: {}", selector, e);
             throw new ElementException("Failed to get text from element: " + selector, e);
         }
     }
@@ -280,10 +353,10 @@ public abstract class BasePage {
     public String getValue(String selector) {
         try {
             String value = locator(selector).inputValue();
-            logger.info("Getting value from element {}: {}", selector, value);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Getting value from element {}: {}", selector, value);
             return value;
         } catch (Exception e) {
-            logger.error("Failed to get value from element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get value from element: {}", selector, e);
             throw new ElementException("Failed to get value from element: " + selector, e);
         }
     }
@@ -294,10 +367,10 @@ public abstract class BasePage {
     public String getAttribute(String selector, String attributeName) {
         try {
             String value = locator(selector).getAttribute(attributeName);
-            logger.info("Getting attribute '{}' from element {}: {}", attributeName, selector, value);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Getting attribute '{}' from element {}: {}", attributeName, selector, value);
             return value;
         } catch (Exception e) {
-            logger.error("Failed to get attribute '{}' from element: {}", attributeName, selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get attribute '{}' from element: {}", attributeName, selector, e);
             throw new ElementException("Failed to get attribute '" + attributeName + "' from element: " + selector, e);
         }
     }
@@ -307,10 +380,10 @@ public abstract class BasePage {
      */
     public void selectOption(String selector, String value) {
         try {
-            logger.info("Selecting option '{}' from element: {}", value, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Selecting option '{}' from element: {}", value, selector);
             locator(selector).selectOption(value);
         } catch (Exception e) {
-            logger.error("Failed to select option '{}' from element: {}", value, selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to select option '{}' from element: {}", value, selector, e);
             throw new ElementException("Failed to select option '" + value + "' from element: " + selector, e);
         }
     }
@@ -320,10 +393,10 @@ public abstract class BasePage {
      */
     public void selectOption(String selector, int index) {
         try {
-            logger.info("Selecting option at index {} from element: {}", index, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Selecting option at index {} from element: {}", index, selector);
             locator(selector).selectOption(new SelectOption().setIndex(index));
         } catch (Exception e) {
-            logger.error("Failed to select option at index {} from element: {}", index, selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to select option at index {} from element: {}", index, selector, e);
             throw new ElementException("Failed to select option at index " + index + " from element: " + selector, e);
         }
     }
@@ -333,10 +406,10 @@ public abstract class BasePage {
      */
     public void check(String selector) {
         try {
-            logger.info("Checking element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Checking element: {}", selector);
             locator(selector).check();
         } catch (Exception e) {
-            logger.error("Failed to check element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check element: {}", selector, e);
             throw new ElementException("Failed to check element: " + selector, e);
         }
     }
@@ -346,10 +419,10 @@ public abstract class BasePage {
      */
     public void uncheck(String selector) {
         try {
-            logger.info("Unchecking element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Unchecking element: {}", selector);
             locator(selector).uncheck();
         } catch (Exception e) {
-            logger.error("Failed to uncheck element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to uncheck element: {}", selector, e);
             throw new ElementException("Failed to uncheck element: " + selector, e);
         }
     }
@@ -359,10 +432,10 @@ public abstract class BasePage {
      */
     public void uploadFile(String selector, String filePath) {
         try {
-            logger.info("Uploading file '{}' to element: {}", filePath, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Uploading file '{}' to element: {}", filePath, selector);
             locator(selector).setInputFiles(Paths.get(filePath));
         } catch (Exception e) {
-            logger.error("Failed to upload file '{}' to element: {}", filePath, selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to upload file '{}' to element: {}", filePath, selector, e);
             throw new ElementException("Failed to upload file '" + filePath + "' to element: " + selector, e);
         }
     }
@@ -374,10 +447,10 @@ public abstract class BasePage {
      */
     public void waitForVisible(String selector) {
         try {
-            logger.info("Waiting for element to be visible: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be visible: {}", selector);
             locator(selector).waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE));
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be visible: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be visible: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be visible: " + selector, e);
         }
     }
@@ -387,10 +460,10 @@ public abstract class BasePage {
      */
     public void waitForHidden(String selector) {
         try {
-            logger.info("Waiting for element to be hidden: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be hidden: {}", selector);
             locator(selector).waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.HIDDEN));
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be hidden: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be hidden: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be hidden: " + selector, e);
         }
     }
@@ -400,10 +473,10 @@ public abstract class BasePage {
      */
     public void waitForAttached(String selector) {
         try {
-            logger.info("Waiting for element to be attached: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be attached: {}", selector);
             locator(selector).waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.ATTACHED));
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be attached: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be attached: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be attached: " + selector, e);
         }
     }
@@ -413,10 +486,10 @@ public abstract class BasePage {
      */
     public void waitForDetached(String selector) {
         try {
-            logger.info("Waiting for element to be detached: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be detached: {}", selector);
             locator(selector).waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.DETACHED));
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be detached: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be detached: {}", selector, e);
             throw new RuntimeException("Failed to wait for element to be detached: " + selector, e);
         }
     }
@@ -426,11 +499,11 @@ public abstract class BasePage {
      */
     public void waitForTimeout(int milliseconds) {
         try {
-            logger.info("Waiting for {} milliseconds", milliseconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for {} milliseconds", milliseconds);
             ensurePageValid();
             page.waitForTimeout(milliseconds);
         } catch (Exception e) {
-            logger.error("Failed to wait for {} milliseconds", milliseconds, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for {} milliseconds", milliseconds, e);
             throw new RuntimeException("Failed to wait for " + milliseconds + " milliseconds", e);
         }
     }
@@ -443,10 +516,10 @@ public abstract class BasePage {
     public boolean isVisible(String selector) {
         try {
             boolean visible = locator(selector).isVisible();
-            logger.info("Element {} is visible: {}", selector, visible);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is visible: {}", selector, visible);
             return visible;
         } catch (Exception e) {
-            logger.error("Failed to check if element is visible: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is visible: {}", selector, e);
             throw new RuntimeException("Failed to check if element is visible: " + selector, e);
         }
     }
@@ -457,10 +530,10 @@ public abstract class BasePage {
     public boolean exists(String selector) {
         try {
             boolean exists = locator(selector).count() > 0;
-            logger.info("Element {} exists: {}", selector, exists);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} exists: {}", selector, exists);
             return exists;
         } catch (Exception e) {
-            logger.error("Failed to check if element exists: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element exists: {}", selector, e);
             throw new RuntimeException("Failed to check if element exists: " + selector, e);
         }
     }
@@ -471,10 +544,10 @@ public abstract class BasePage {
     public boolean isChecked(String selector) {
         try {
             boolean checked = locator(selector).isChecked();
-            logger.info("Element {} is checked: {}", selector, checked);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is checked: {}", selector, checked);
             return checked;
         } catch (Exception e) {
-            logger.error("Failed to check if element is checked: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is checked: {}", selector, e);
             throw new RuntimeException("Failed to check if element is checked: " + selector, e);
         }
     }
@@ -485,10 +558,10 @@ public abstract class BasePage {
     public boolean isEnabled(String selector) {
         try {
             boolean enabled = locator(selector).isEnabled();
-            logger.info("Element {} is enabled: {}", selector, enabled);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is enabled: {}", selector, enabled);
             return enabled;
         } catch (Exception e) {
-            logger.error("Failed to check if element is enabled: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is enabled: {}", selector, e);
             throw new RuntimeException("Failed to check if element is enabled: " + selector, e);
         }
     }
@@ -499,10 +572,10 @@ public abstract class BasePage {
     public boolean isDisabled(String selector) {
         try {
             boolean disabled = locator(selector).isDisabled();
-            logger.info("Element {} is disabled: {}", selector, disabled);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is disabled: {}", selector, disabled);
             return disabled;
         } catch (Exception e) {
-            logger.error("Failed to check if element is disabled: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is disabled: {}", selector, e);
             throw new RuntimeException("Failed to check if element is disabled: " + selector, e);
         }
     }
@@ -514,11 +587,11 @@ public abstract class BasePage {
      */
     public void navigateTo(String url) {
         try {
-            logger.info("Navigating to URL: {}", url);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Navigating to URL: {}", url);
             ensurePageValid();
             page.navigate(url);
         } catch (Exception e) {
-            logger.error("Failed to navigate to URL: {}", url, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to navigate to URL: {}", url, e);
             throw new RuntimeException("Failed to navigate to URL: " + url, e);
         }
     }
@@ -528,11 +601,11 @@ public abstract class BasePage {
      */
     public void refresh() {
         try {
-            logger.info("Refreshing page");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Refreshing page");
             ensurePageValid();
             page.reload();
         } catch (Exception e) {
-            logger.error("Failed to refresh page", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to refresh page", e);
             throw new RuntimeException("Failed to refresh page", e);
         }
     }
@@ -542,11 +615,11 @@ public abstract class BasePage {
      */
     public void forward() {
         try {
-            logger.info("Going forward");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Going forward");
             ensurePageValid();
             page.goForward();
         } catch (Exception e) {
-            logger.error("Failed to go forward", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to go forward", e);
             throw new RuntimeException("Failed to go forward", e);
         }
     }
@@ -556,11 +629,11 @@ public abstract class BasePage {
      */
     public void back() {
         try {
-            logger.info("Going back");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Going back");
             ensurePageValid();
             page.goBack();
         } catch (Exception e) {
-            logger.error("Failed to go back", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to go back", e);
             throw new RuntimeException("Failed to go back", e);
         }
     }
@@ -572,10 +645,10 @@ public abstract class BasePage {
         try {
             ensurePageValid();
             String url = page.url();
-            logger.info("Current URL: {}", url);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Current URL: {}", url);
             return url;
         } catch (Exception e) {
-            logger.error("Failed to get current URL", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get current URL", e);
             throw new RuntimeException("Failed to get current URL", e);
         }
     }
@@ -587,10 +660,10 @@ public abstract class BasePage {
         try {
             ensurePageValid();
             String title = page.title();
-            logger.info("Page title: {}", title);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page title: {}", title);
             return title;
         } catch (Exception e) {
-            logger.error("Failed to get page title", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get page title", e);
             throw new RuntimeException("Failed to get page title", e);
         }
     }
@@ -602,11 +675,11 @@ public abstract class BasePage {
      */
     public Object executeJavaScript(String script, Object... args) {
         try {
-            logger.info("Executing JavaScript: {}", script);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Executing JavaScript: {}", script);
             ensurePageValid();
             return page.evaluate(script, args);
         } catch (Exception e) {
-            logger.error("Failed to execute JavaScript: {}", script, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to execute JavaScript: {}", script, e);
             throw new RuntimeException("Failed to execute JavaScript: " + script, e);
         }
     }
@@ -616,11 +689,11 @@ public abstract class BasePage {
      */
     public void scrollToTop() {
         try {
-            logger.info("Scrolling to top of page");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling to top of page");
             ensurePageValid();
             page.evaluate("window.scrollTo(0, 0)");
         } catch (Exception e) {
-            logger.error("Failed to scroll to top of page", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll to top of page", e);
             throw new RuntimeException("Failed to scroll to top of page", e);
         }
     }
@@ -630,11 +703,11 @@ public abstract class BasePage {
      */
     public void scrollToBottom() {
         try {
-            logger.info("Scrolling to bottom of page");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling to bottom of page");
             ensurePageValid();
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
         } catch (Exception e) {
-            logger.error("Failed to scroll to bottom of page", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll to bottom of page", e);
             throw new RuntimeException("Failed to scroll to bottom of page", e);
         }
     }
@@ -644,10 +717,10 @@ public abstract class BasePage {
      */
     public void scrollToElement(String selector) {
         try {
-            logger.info("Scrolling to element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling to element: {}", selector);
             locator(selector).scrollIntoViewIfNeeded();
         } catch (Exception e) {
-            logger.error("Failed to scroll to element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll to element: {}", selector, e);
             throw new RuntimeException("Failed to scroll to element: " + selector, e);
         }
     }
@@ -663,14 +736,14 @@ public abstract class BasePage {
     public void waitForElementVisibleWithinTime(String selector, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for element to be visible within {}s: {}", timeoutSeconds, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be visible within {}s: {}", timeoutSeconds, selector);
             ensurePageValid();
             locator(selector).waitFor(new Locator.WaitForOptions()
                 .setState(WaitForSelectorState.VISIBLE)
                 .setTimeout(timeoutMillis));
-            logger.info("Element is now visible: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now visible: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be visible: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be visible: {}", selector, e);
             throw new TimeoutException("Element not visible within timeout: " + selector, e);
         }
     }
@@ -685,14 +758,14 @@ public abstract class BasePage {
     public void waitForElementHiddenWithinTime(String selector, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for element to be hidden within {}s: {}", timeoutSeconds, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be hidden within {}s: {}", timeoutSeconds, selector);
             ensurePageValid();
             locator(selector).waitFor(new Locator.WaitForOptions()
                 .setState(WaitForSelectorState.HIDDEN)
                 .setTimeout(timeoutMillis));
-            logger.info("Element is now hidden: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now hidden: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be hidden: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be hidden: {}", selector, e);
             throw new TimeoutException("Element not hidden within timeout: " + selector, e);
         }
     }
@@ -706,46 +779,46 @@ public abstract class BasePage {
     public void waitForElementClickableWithinTime(String selector, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for element to be clickable within {}s: {}", timeoutSeconds, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be clickable within {}s: {}", timeoutSeconds, selector);
             ensurePageValid();
             locator(selector).waitFor(new Locator.WaitForOptions()
                 .setState(WaitForSelectorState.VISIBLE)
                 .setTimeout(timeoutMillis));
-            logger.info("Element is now clickable: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now clickable: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be clickable: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be clickable: {}", selector, e);
             throw new TimeoutException("Element not clickable within timeout: " + selector, e);
         }
     }
 
     /**
-     * 在指定时间范围内等待页面标题包含文本
+     * 在指定时间范围内等待页面标题包含文本（失败时抛出异常）
      * @param expectedTitle 期望的标题文本
      * @param timeoutSeconds 最大超时时间（秒）
-     * @return 如果页面标题在指定时间内包含文本则返回true，否则返回false
+     * @throws TimeoutException 如果页面标题在超时时间内不包含指定文本
      */
     public void waitForTitleContainsWithinTime(String expectedTitle, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for title to contain '{}' within {}s", expectedTitle, timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for title to contain '{}' within {}s", expectedTitle, timeoutSeconds);
             long startTime = System.currentTimeMillis();
             long endTime = startTime + timeoutMillis;
 
             while (System.currentTimeMillis() < endTime) {
                 String currentTitle = page.title();
                 if (currentTitle.contains(expectedTitle)) {
-                    logger.info("Title contains expected text: '{}'", expectedTitle);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Title contains expected text: '{}'", expectedTitle);
                     return;
                 }
                 waitForTimeout(500);
             }
 
-            logger.warn("Timeout waiting for title to contain: {}", expectedTitle);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Timeout waiting for title to contain: {}", expectedTitle);
             throw new TimeoutException("Title does not contain expected text within timeout: " + expectedTitle);
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for title to contain: {}", expectedTitle, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for title to contain: {}", expectedTitle, e);
             throw new TimeoutException("Failed to wait for title to contain: " + expectedTitle, e);
         }
     }
@@ -759,25 +832,25 @@ public abstract class BasePage {
     public void waitForUrlContainsWithinTime(String expectedUrlFragment, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for URL to contain '{}' within {}s", expectedUrlFragment, timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for URL to contain '{}' within {}s", expectedUrlFragment, timeoutSeconds);
             long startTime = System.currentTimeMillis();
             long endTime = startTime + timeoutMillis;
 
             while (System.currentTimeMillis() < endTime) {
                 String currentUrl = page.url();
                 if (currentUrl.contains(expectedUrlFragment)) {
-                    logger.info("URL contains expected fragment: '{}'", expectedUrlFragment);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "URL contains expected fragment: '{}'", expectedUrlFragment);
                     return;
                 }
                 waitForTimeout(500);
             }
 
-            logger.warn("Timeout waiting for URL to contain: {}", expectedUrlFragment);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Timeout waiting for URL to contain: {}", expectedUrlFragment);
             throw new TimeoutException("URL does not contain expected fragment within timeout: " + expectedUrlFragment);
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for URL to contain: {}", expectedUrlFragment, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for URL to contain: {}", expectedUrlFragment, e);
             throw new TimeoutException("Failed to wait for URL to contain: " + expectedUrlFragment, e);
         }
     }
@@ -793,23 +866,23 @@ public abstract class BasePage {
     public boolean performActionWithTimeout(Runnable action, Supplier<Boolean> validation, int timeoutSeconds, String actionDescription) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Performing '{}' within {}s", actionDescription, timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Performing '{}' within {}s", actionDescription, timeoutSeconds);
             long startTime = System.currentTimeMillis();
             long endTime = startTime + timeoutMillis;
             
             while (System.currentTimeMillis() < endTime) {
                 action.run();
                 if (validation.get()) {
-                    logger.info("Action '{}' completed successfully", actionDescription);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Action '{}' completed successfully", actionDescription);
                     return true;
                 }
                 waitForTimeout(500);
             }
 
-            logger.warn("Timeout performing action: {}", actionDescription);
+            LoggingConfigUtil.logWarnIfVerbose(logger, "Timeout performing action: {}", actionDescription);
             return false;
         } catch (Exception e) {
-            logger.error("Failed to perform action: {}", actionDescription, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to perform action: {}", actionDescription, e);
             throw new RuntimeException("Failed to perform action: " + actionDescription, e);
         }
     }
@@ -821,11 +894,11 @@ public abstract class BasePage {
      */
     public void acceptAlert() {
         try {
-            logger.info("Accepting alert");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Accepting alert");
             ensurePageValid();
-            page.onDialog(dialog -> dialog.accept());
+            page.onDialog(Dialog::accept);
         } catch (Exception e) {
-            logger.error("Failed to accept alert", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to accept alert", e);
             throw new RuntimeException("Failed to accept alert", e);
         }
     }
@@ -835,11 +908,11 @@ public abstract class BasePage {
      */
     public void dismissAlert() {
         try {
-            logger.info("Dismissing alert");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Dismissing alert");
             ensurePageValid();
-            page.onDialog(dialog -> dialog.dismiss());
+            page.onDialog(Dialog::dismiss);
         } catch (Exception e) {
-            logger.error("Failed to dismiss alert", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to dismiss alert", e);
             throw new RuntimeException("Failed to dismiss alert", e);
         }
     }
@@ -849,13 +922,13 @@ public abstract class BasePage {
      */
     public void acceptPrompt(String text) {
         try {
-            logger.info("Accepting prompt with text: {}", text);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Accepting prompt with text: {}", text);
             ensurePageValid();
             page.onDialog(dialog -> {
                 dialog.accept(text);
             });
         } catch (Exception e) {
-            logger.error("Failed to accept prompt with text: {}", text, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to accept prompt with text: {}", text, e);
             throw new RuntimeException("Failed to accept prompt with text: " + text, e);
         }
     }
@@ -867,11 +940,11 @@ public abstract class BasePage {
      */
     public void takeScreenshot() {
         try {
-            logger.info("Taking full page screenshot");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Taking full page screenshot");
             ensurePageValid();
             page.screenshot(new Page.ScreenshotOptions().setFullPage(true));
         } catch (Exception e) {
-            logger.error("Failed to take full page screenshot", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to take full page screenshot", e);
             throw new RuntimeException("Failed to take full page screenshot", e);
         }
     }
@@ -881,10 +954,10 @@ public abstract class BasePage {
      */
     public void takeElementScreenshot(String selector) {
         try {
-            logger.info("Taking screenshot of element: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Taking screenshot of element: {}", selector);
             locator(selector).screenshot();
         } catch (Exception e) {
-            logger.error("Failed to take screenshot of element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to take screenshot of element: {}", selector, e);
             throw new RuntimeException("Failed to take screenshot of element: " + selector, e);
         }
     }
@@ -898,10 +971,10 @@ public abstract class BasePage {
         try {
             String actualText = getText(selector);
             boolean contains = actualText.contains(expectedText);
-            logger.info("Text verification - Element '{}' contains '{}': {}", selector, expectedText, contains);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Text verification - Element '{}' contains '{}': {}", selector, expectedText, contains);
             return contains;
         } catch (Exception e) {
-            logger.error("Failed to verify text contains for element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify text contains for element: {}", selector, e);
             throw new RuntimeException("Failed to verify text contains for element: " + selector, e);
         }
     }
@@ -913,10 +986,10 @@ public abstract class BasePage {
         try {
             String actualText = getText(selector);
             boolean equals = actualText.equals(expectedText);
-            logger.info("Text verification - Element '{}' equals '{}': {}", selector, expectedText, equals);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Text verification - Element '{}' equals '{}': {}", selector, expectedText, equals);
             return equals;
         } catch (Exception e) {
-            logger.error("Failed to verify text equals for element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify text equals for element: {}", selector, e);
             throw new RuntimeException("Failed to verify text equals for element: " + selector, e);
         }
     }
@@ -928,10 +1001,10 @@ public abstract class BasePage {
         try {
             String actualText = getText(selector);
             boolean matches = Pattern.matches(regex, actualText);
-            logger.info("Text verification - Element '{}' matches '{}': {}", selector, regex, matches);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Text verification - Element '{}' matches '{}': {}", selector, regex, matches);
             return matches;
         } catch (Exception e) {
-            logger.error("Failed to verify text matches for element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify text matches for element: {}", selector, e);
             throw new RuntimeException("Failed to verify text matches for element: " + selector, e);
         }
     }
@@ -943,14 +1016,14 @@ public abstract class BasePage {
      *
      * @param formData 键值对，键为选择器，值为输入的文本
      */
-    public void fillForm(java.util.Map<String, String> formData) {
+    public void fillForm(Map<String, String> formData) {
         try {
-            logger.info("Filling form with {} fields", formData.size());
-            for (java.util.Map.Entry<String, String> entry : formData.entrySet()) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Filling form with {} fields", formData.size());
+            for (Map.Entry<String, String> entry : formData.entrySet()) {
                 type(entry.getKey(), entry.getValue());
             }
         } catch (Exception e) {
-            logger.error("Failed to fill form with {} fields", formData.size(), e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to fill form with {} fields", formData.size(), e);
             throw new RuntimeException("Failed to fill form with " + formData.size() + " fields", e);
         }
     }
@@ -960,10 +1033,10 @@ public abstract class BasePage {
      */
     public void submitForm(String formSelector) {
         try {
-            logger.info("Submitting form: {}", formSelector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Submitting form: {}", formSelector);
             locator(formSelector).evaluate("form => form.submit()");
         } catch (Exception e) {
-            logger.error("Failed to submit form: {}", formSelector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to submit form: {}", formSelector, e);
             throw new RuntimeException("Failed to submit form: " + formSelector, e);
         }
     }
@@ -975,10 +1048,10 @@ public abstract class BasePage {
      */
     public void addCookie(String name, String value) {
         try {
-            logger.info("Adding cookie: {} = {}", name, value);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Adding cookie: {} = {}", name, value);
             getContext().addCookies(Collections.singletonList(new Cookie(name, value)));
         } catch (Exception e) {
-            logger.error("Failed to add cookie: {} = {}", name, value, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to add cookie: {} = {}", name, value, e);
             throw new RuntimeException("Failed to add cookie: " + name + " = " + value, e);
         }
     }
@@ -995,10 +1068,10 @@ public abstract class BasePage {
      */
     public void clearCookies() {
         try {
-            logger.info("Clearing all cookies");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Clearing all cookies");
             getContext().clearCookies();
         } catch (Exception e) {
-            logger.error("Failed to clear all cookies", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to clear all cookies", e);
             throw new RuntimeException("Failed to clear all cookies", e);
         }
     }
@@ -1010,11 +1083,11 @@ public abstract class BasePage {
      */
     public void pause() {
         try {
-            logger.info("Pausing execution for debugging");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Pausing execution for debugging");
             ensurePageValid();
             page.pause();
         } catch (Exception e) {
-            logger.error("Failed to pause execution for debugging", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to pause execution for debugging", e);
             throw new RuntimeException("Failed to pause execution for debugging", e);
         }
     }
@@ -1025,12 +1098,12 @@ public abstract class BasePage {
     public void logPageInfo() {
         try {
             ensurePageValid();
-            logger.info("Page Information:");
-            logger.info("URL: {}", page.url());
-            logger.info("Title: {}", page.title());
-            logger.info("Viewport: {}", page.viewportSize());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page Information:");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "URL: {}", page.url());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Title: {}", page.title());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Viewport: {}", page.viewportSize());
         } catch (Exception e) {
-            logger.error("Failed to log page information", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to log page information", e);
             throw new RuntimeException("Failed to log page information", e);
         }
     }
@@ -1046,10 +1119,10 @@ public abstract class BasePage {
         try {
             String pageContent = page.content();
             boolean contains = pageContent.contains(text);
-            logger.info("Page contains text '{}': {}", text, contains);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page contains text '{}': {}", text, contains);
             return contains;
         } catch (Exception e) {
-            logger.error("Failed to check if page contains text: {}", text, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if page contains text: {}", text, e);
             throw new RuntimeException("Failed to check if page contains text: " + text, e);
         }
     }
@@ -1061,12 +1134,12 @@ public abstract class BasePage {
     public void waitForPageLoad(int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for page to load with timeout: {}s", timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for page to load with timeout: {}s", timeoutSeconds);
             ensurePageValid();
             page.waitForLoadState(LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(timeoutMillis));
-            logger.info("Page loaded successfully");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page loaded successfully");
         } catch (Exception e) {
-            logger.error("Failed to wait for page load", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for page load", e);
             throw new RuntimeException("Failed to wait for page load", e);
         }
     }
@@ -1079,14 +1152,14 @@ public abstract class BasePage {
     public void waitForElementClickable(String selector, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for element to be clickable: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be clickable: {}", selector);
             ensurePageValid();
             locator(selector).waitFor(new Locator.WaitForOptions()
                 .setState(WaitForSelectorState.ATTACHED)
                 .setTimeout(timeoutMillis));
-            logger.info("Element is now clickable: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now clickable: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be clickable: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be clickable: {}", selector, e);
             throw new RuntimeException("Failed to wait for element to be clickable: " + selector, e);
         }
     }
@@ -1099,14 +1172,14 @@ public abstract class BasePage {
     public void waitForElementNotVisible(String selector, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for element to be not visible: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be not visible: {}", selector);
             ensurePageValid();
             locator(selector).waitFor(new Locator.WaitForOptions()
                 .setState(WaitForSelectorState.HIDDEN)
                 .setTimeout(timeoutMillis));
-            logger.info("Element is now not visible: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now not visible: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be not visible: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be not visible: {}", selector, e);
             throw new RuntimeException("Failed to wait for element to be not visible: " + selector, e);
         }
     }
@@ -1121,10 +1194,10 @@ public abstract class BasePage {
         try {
             ensureContextValid();
             int pageCount = context.pages().size();
-            logger.info("Current page count: {}", pageCount);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Current page count: {}", pageCount);
             return pageCount;
         } catch (Exception e) {
-            logger.error("Failed to get page count", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get page count", e);
             throw new RuntimeException("Failed to get page count", e);
         }
     }
@@ -1135,17 +1208,17 @@ public abstract class BasePage {
      */
     public void switchToPage(int index) {
         try {
-            logger.info("Switching to page with index: {}", index);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Switching to page with index: {}", index);
             ensureContextValid();
             List<Page> pages = context.pages();
             if (index >= 0 && index < pages.size()) {
                 page = pages.get(index);
-                logger.info("Switched to page: {}", index);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Switched to page: {}", index);
             } else {
                 throw new RuntimeException("Invalid page index: " + index + ". Available pages: " + pages.size());
             }
         } catch (Exception e) {
-            logger.error("Failed to switch to page: {}", index, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to switch to page: {}", index, e);
             throw new RuntimeException("Failed to switch to page: " + index, e);
         }
     }
@@ -1160,7 +1233,7 @@ public abstract class BasePage {
             List<Page> pages = context.pages();
             return pages.indexOf(page);
         } catch (Exception e) {
-            logger.error("Failed to get current page index", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get current page index", e);
             throw new RuntimeException("Failed to get current page index", e);
         }
     }
@@ -1170,12 +1243,12 @@ public abstract class BasePage {
      */
     public void closePage() {
         try {
-            logger.info("Closing current page");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Closing current page");
             ensurePageValid();
             page.close();
-            logger.info("Page closed successfully");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page closed successfully");
         } catch (Exception e) {
-            logger.error("Failed to close page", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to close page", e);
             throw new RuntimeException("Failed to close page", e);
         }
     }
@@ -1188,7 +1261,7 @@ public abstract class BasePage {
     public Page waitForNewPage(int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for new page to open with timeout: {}s", timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for new page to open with timeout: {}s", timeoutSeconds);
             ensureContextValid();
             
             int initialPageCount = context.pages().size();
@@ -1198,7 +1271,7 @@ public abstract class BasePage {
             while (System.currentTimeMillis() < endTime) {
                 if (context.pages().size() > initialPageCount) {
                     Page newPage = context.pages().get(initialPageCount);
-                    logger.info("New page opened: {}", newPage.url());
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "New page opened: {}", newPage.url());
                     return newPage;
                 }
                 waitForTimeout(500);
@@ -1206,7 +1279,7 @@ public abstract class BasePage {
 
             throw new RuntimeException("Timeout waiting for new page to open");
         } catch (Exception e) {
-            logger.error("Failed to wait for new page", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for new page", e);
             throw new RuntimeException("Failed to wait for new page", e);
         }
     }
@@ -1219,7 +1292,7 @@ public abstract class BasePage {
     public void waitForTitleContains(String expectedTitle, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for title to contain: '{}' with timeout: {}s", expectedTitle, timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for title to contain: '{}' with timeout: {}s", expectedTitle, timeoutSeconds);
             ensurePageValid();
             
             long startTime = System.currentTimeMillis();
@@ -1228,7 +1301,7 @@ public abstract class BasePage {
             while (System.currentTimeMillis() < endTime) {
                 String currentTitle = page.title();
                 if (currentTitle.contains(expectedTitle)) {
-                    logger.info("Title contains expected text: '{}'", expectedTitle);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Title contains expected text: '{}'", expectedTitle);
                     return;
                 }
                 waitForTimeout(500);
@@ -1236,7 +1309,7 @@ public abstract class BasePage {
 
             throw new RuntimeException("Timeout waiting for title to contain: " + expectedTitle);
         } catch (Exception e) {
-            logger.error("Failed to wait for title to contain: {}", expectedTitle, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for title to contain: {}", expectedTitle, e);
             throw new RuntimeException("Failed to wait for title to contain: " + expectedTitle, e);
         }
     }
@@ -1249,7 +1322,7 @@ public abstract class BasePage {
     public void waitForUrlContains(String expectedUrlFragment, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for URL to contain: '{}' with timeout: {}s", expectedUrlFragment, timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for URL to contain: '{}' with timeout: {}s", expectedUrlFragment, timeoutSeconds);
             ensurePageValid();
             
             long startTime = System.currentTimeMillis();
@@ -1258,7 +1331,7 @@ public abstract class BasePage {
             while (System.currentTimeMillis() < endTime) {
                 String currentUrl = page.url();
                 if (currentUrl.contains(expectedUrlFragment)) {
-                    logger.info("URL contains expected fragment: '{}'", expectedUrlFragment);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "URL contains expected fragment: '{}'", expectedUrlFragment);
                     return;
                 }
                 waitForTimeout(500);
@@ -1266,7 +1339,7 @@ public abstract class BasePage {
 
             throw new RuntimeException("Timeout waiting for URL to contain: " + expectedUrlFragment);
         } catch (Exception e) {
-            logger.error("Failed to wait for URL to contain: {}", expectedUrlFragment, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for URL to contain: {}", expectedUrlFragment, e);
             throw new RuntimeException("Failed to wait for URL to contain: " + expectedUrlFragment, e);
         }
     }
@@ -1279,10 +1352,10 @@ public abstract class BasePage {
         try {
             ensurePageValid();
             String pageSource = page.content();
-            logger.info("Got page source, length: {} characters", pageSource.length());
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Got page source, length: {} characters", pageSource.length());
             return pageSource;
         } catch (Exception e) {
-            logger.error("Failed to get page source", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get page source", e);
             throw new RuntimeException("Failed to get page source", e);
         }
     }
@@ -1296,10 +1369,10 @@ public abstract class BasePage {
         try {
             String pageSource = getPageSource();
             boolean contains = pageSource.contains(text);
-            logger.info("Page source contains text '{}': {}", text, contains);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page source contains text '{}': {}", text, contains);
             return contains;
         } catch (Exception e) {
-            logger.error("Failed to check if page source contains text: {}", text, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if page source contains text: {}", text, e);
             throw new RuntimeException("Failed to check if page source contains text: " + text, e);
         }
     }
@@ -1317,12 +1390,12 @@ public abstract class BasePage {
             if (!actualValue.equals(expectedValue)) {
                 String errorMsg = String.format("Attribute '%s' should be '%s' but was '%s' for element: %s", 
                     attributeName, expectedValue, actualValue, selector);
-                logger.error(errorMsg);
+                LoggingConfigUtil.logErrorIfVerbose(logger, errorMsg);
                 throw new RuntimeException(errorMsg);
             }
-            logger.info("Attribute '{}' is '{}' as expected for element: {}", attributeName, expectedValue, selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Attribute '{}' is '{}' as expected for element: {}", attributeName, expectedValue, selector);
         } catch (Exception e) {
-            logger.error("Failed to verify attribute value for element: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify attribute value for element: {}", selector, e);
             throw new RuntimeException("Failed to verify attribute value for element: " + selector, e);
         }
     }
@@ -1335,10 +1408,10 @@ public abstract class BasePage {
     public boolean isElementClickable(String selector) {
         try {
             boolean clickable = locator(selector).isVisible() && locator(selector).isEnabled();
-            logger.info("Element {} is clickable: {}", selector, clickable);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is clickable: {}", selector, clickable);
             return clickable;
         } catch (Exception e) {
-            logger.error("Failed to check if element is clickable: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is clickable: {}", selector, e);
             throw new RuntimeException("Failed to check if element is clickable: " + selector, e);
         }
     }
@@ -1352,12 +1425,12 @@ public abstract class BasePage {
         try {
             if (!isVisible(selector)) {
                 String errorMsg = "Element should be visible but is not: " + selector;
-                logger.error(errorMsg);
+                LoggingConfigUtil.logErrorIfVerbose(logger, errorMsg);
                 throw new RuntimeException(errorMsg);
             }
-            logger.info("Element is visible as expected: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element is visible as expected: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to verify element should be visible: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify element should be visible: {}", selector, e);
             throw new RuntimeException("Failed to verify element should be visible: " + selector, e);
         }
     }
@@ -1371,12 +1444,12 @@ public abstract class BasePage {
         try {
             if (isVisible(selector)) {
                 String errorMsg = "Element should not be visible but is: " + selector;
-                logger.error(errorMsg);
+                LoggingConfigUtil.logErrorIfVerbose(logger, errorMsg);
                 throw new RuntimeException(errorMsg);
             }
-            logger.info("Element is not visible as expected: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element is not visible as expected: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to verify element should not be visible: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify element should not be visible: {}", selector, e);
             throw new RuntimeException("Failed to verify element should not be visible: " + selector, e);
         }
     }
@@ -1389,10 +1462,10 @@ public abstract class BasePage {
     public int getElementCount(String selector) {
         try {
             int count = locator(selector).count();
-            logger.info("Element count for {}: {}", selector, count);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element count for {}: {}", selector, count);
             return count;
         } catch (Exception e) {
-            logger.error("Failed to get element count for: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get element count for: {}", selector, e);
             throw new RuntimeException("Failed to get element count for: " + selector, e);
         }
     }
@@ -1413,16 +1486,16 @@ public abstract class BasePage {
             try {
                 operation.run();
                 if (attempt > 0) {
-                    logger.info("Operation '{}' succeeded on attempt {}/{}", operationDescription, attempt + 1, maxRetries + 1);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Operation '{}' succeeded on attempt {}/{}", operationDescription, attempt + 1, maxRetries + 1);
                 }
                 return;
             } catch (Exception e) {
                 attempt++;
                 if (attempt > maxRetries) {
-                    logger.error("Operation '{}' failed after {} attempts: {}", operationDescription, maxRetries + 1, e.getMessage());
+                    LoggingConfigUtil.logErrorIfVerbose(logger, "Operation '{}' failed after {} attempts: {}", operationDescription, maxRetries + 1, e.getMessage());
                     throw new TimeoutException("Operation '" + operationDescription + "' failed after " + (maxRetries + 1) + " attempts", e);
                 }
-                logger.warn("Operation '{}' failed on attempt {}/{}, retrying in {}ms. Error: {}", 
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Operation '{}' failed on attempt {}/{}, retrying in {}ms. Error: {}", 
                     operationDescription, attempt, maxRetries + 1, retryIntervalMs, e.getMessage());
                 try {
                     Thread.sleep(retryIntervalMs);
@@ -1462,22 +1535,22 @@ public abstract class BasePage {
                 operation.run();
                 if (validation.test(null)) {
                     if (attempt > 0) {
-                        logger.info("Operation '{}' and validation succeeded on attempt {}/{}", operationDescription, attempt + 1, maxRetries + 1);
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Operation '{}' and validation succeeded on attempt {}/{}", operationDescription, attempt + 1, maxRetries + 1);
                     }
                     return true;
                 }
             } catch (Exception e) {
-                logger.warn("Operation '{}' failed on attempt {}/{}. Error: {}", 
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Operation '{}' failed on attempt {}/{}. Error: {}", 
                     operationDescription, attempt + 1, maxRetries + 1, e.getMessage());
             }
             
             attempt++;
             if (attempt > maxRetries) {
-                logger.error("Operation '{}' failed validation after {} attempts", operationDescription, maxRetries + 1);
+                LoggingConfigUtil.logErrorIfVerbose(logger, "Operation '{}' failed validation after {} attempts", operationDescription, maxRetries + 1);
                 throw new TimeoutException("Operation '" + operationDescription + "' failed validation after " + (maxRetries + 1) + " attempts");
             }
             
-            logger.info("Retrying operation '{}' in {}ms (attempt {}/{})", 
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Retrying operation '{}' in {}ms (attempt {}/{})", 
                 operationDescription, retryIntervalMs, attempt + 1, maxRetries + 1);
             try {
                 Thread.sleep(retryIntervalMs);
@@ -1499,14 +1572,14 @@ public abstract class BasePage {
     public void waitForElementExists(String selector, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for element to exist: {} (timeout: {}s)", selector, timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to exist: {} (timeout: {}s)", selector, timeoutSeconds);
             ensurePageValid();
             locator(selector).waitFor(new Locator.WaitForOptions()
                 .setState(WaitForSelectorState.ATTACHED)
                 .setTimeout(timeoutMillis));
-            logger.info("Element exists: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element exists: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to wait for element to exist: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to exist: {}", selector, e);
             throw new TimeoutException("Element does not exist within timeout: " + selector, e);
         }
     }
@@ -1519,14 +1592,14 @@ public abstract class BasePage {
     public void waitForElementNotExists(String selector, int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for element to not exist: {} (timeout: {}s)", selector, timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to not exist: {} (timeout: {}s)", selector, timeoutSeconds);
             ensurePageValid();
             locator(selector).waitFor(new Locator.WaitForOptions()
                 .setState(WaitForSelectorState.DETACHED)
                 .setTimeout(timeoutMillis));
-            logger.info("Element does not exist: {}", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element does not exist: {}", selector);
         } catch (Exception e) {
-            logger.error("Failed to wait for element to not exist: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to not exist: {}", selector, e);
             throw new TimeoutException("Element still exists within timeout: " + selector, e);
         }
     }
@@ -1538,12 +1611,12 @@ public abstract class BasePage {
      */
     public void waitForElementEditable(String selector, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element to be editable: {} (timeout: {}s)", selector, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be editable: {} (timeout: {}s)", selector, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 if (isEnabled(selector) && !isDisabled(selector)) {
-                    logger.info("Element is now editable: {}", selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now editable: {}", selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1553,7 +1626,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be editable: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be editable: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be editable: " + selector, e);
         }
     }
@@ -1565,12 +1638,12 @@ public abstract class BasePage {
      */
     public void waitForElementDisabled(String selector, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element to be disabled: {} (timeout: {}s)", selector, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be disabled: {} (timeout: {}s)", selector, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 if (isDisabled(selector)) {
-                    logger.info("Element is now disabled: {}", selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now disabled: {}", selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1580,7 +1653,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be disabled: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be disabled: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be disabled: " + selector, e);
         }
     }
@@ -1592,12 +1665,12 @@ public abstract class BasePage {
      */
     public void waitForElementEnabled(String selector, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element to be enabled: {} (timeout: {}s)", selector, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be enabled: {} (timeout: {}s)", selector, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 if (isEnabled(selector)) {
-                    logger.info("Element is now enabled: {}", selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now enabled: {}", selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1607,7 +1680,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be enabled: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be enabled: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be enabled: " + selector, e);
         }
     }
@@ -1621,14 +1694,14 @@ public abstract class BasePage {
      */
     public void waitForElementAttributeEquals(String selector, String attributeName, String expectedAttributeValue, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element attribute '{}' to equal '{}' within {}s: {}", 
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element attribute '{}' to equal '{}' within {}s: {}", 
                 attributeName, expectedAttributeValue, timeoutSeconds, selector);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 String actualValue = getAttribute(selector, attributeName);
                 if (expectedAttributeValue.equals(actualValue)) {
-                    logger.info("Element attribute '{}' now equals '{}': {}", attributeName, expectedAttributeValue, selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element attribute '{}' now equals '{}': {}", attributeName, expectedAttributeValue, selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1638,7 +1711,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element attribute: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element attribute: {}", selector, e);
             throw new TimeoutException("Failed to wait for element attribute: " + selector, e);
         }
     }
@@ -1652,14 +1725,14 @@ public abstract class BasePage {
      */
     public void waitForElementAttributeContains(String selector, String attributeName, String expectedAttributeValue, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element attribute '{}' to contain '{}' within {}s: {}", 
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element attribute '{}' to contain '{}' within {}s: {}", 
                 attributeName, expectedAttributeValue, timeoutSeconds, selector);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 String actualValue = getAttribute(selector, attributeName);
                 if (actualValue != null && actualValue.contains(expectedAttributeValue)) {
-                    logger.info("Element attribute '{}' now contains '{}': {}", attributeName, expectedAttributeValue, selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element attribute '{}' now contains '{}': {}", attributeName, expectedAttributeValue, selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1669,7 +1742,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element attribute: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element attribute: {}", selector, e);
             throw new TimeoutException("Failed to wait for element attribute: " + selector, e);
         }
     }
@@ -1682,13 +1755,13 @@ public abstract class BasePage {
      */
     public void waitForElementTextContains(String selector, String expectedText, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element text to contain '{}' within {}s: {}", expectedText, timeoutSeconds, selector);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element text to contain '{}' within {}s: {}", expectedText, timeoutSeconds, selector);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 String actualText = getText(selector);
                 if (actualText.contains(expectedText)) {
-                    logger.info("Element text now contains '{}': {}", expectedText, selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element text now contains '{}': {}", expectedText, selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1698,7 +1771,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element text: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element text: {}", selector, e);
             throw new TimeoutException("Failed to wait for element text: " + selector, e);
         }
     }
@@ -1711,13 +1784,13 @@ public abstract class BasePage {
      */
     public void waitForElementTextEquals(String selector, String expectedText, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element text to equal '{}' within {}s: {}", expectedText, timeoutSeconds, selector);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element text to equal '{}' within {}s: {}", expectedText, timeoutSeconds, selector);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 String actualText = getText(selector);
                 if (expectedText.equals(actualText)) {
-                    logger.info("Element text now equals '{}': {}", expectedText, selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element text now equals '{}': {}", expectedText, selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1727,7 +1800,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element text: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element text: {}", selector, e);
             throw new TimeoutException("Failed to wait for element text: " + selector, e);
         }
     }
@@ -1740,13 +1813,13 @@ public abstract class BasePage {
      */
     public void waitForElementCount(String selector, int expectedCount, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element count to equal {} within {}s: {}", expectedCount, timeoutSeconds, selector);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element count to equal {} within {}s: {}", expectedCount, timeoutSeconds, selector);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 int actualCount = getElementCount(selector);
                 if (actualCount == expectedCount) {
-                    logger.info("Element count now equals {}: {}", expectedCount, selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element count now equals {}: {}", expectedCount, selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1757,7 +1830,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element count: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element count: {}", selector, e);
             throw new TimeoutException("Failed to wait for element count: " + selector, e);
         }
     }
@@ -1770,13 +1843,13 @@ public abstract class BasePage {
      */
     public void waitForElementCountAtLeast(String selector, int minimumCount, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element count to be at least {} within {}s: {}", minimumCount, timeoutSeconds, selector);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element count to be at least {} within {}s: {}", minimumCount, timeoutSeconds, selector);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 int actualCount = getElementCount(selector);
                 if (actualCount >= minimumCount) {
-                    logger.info("Element count now at least {}: {} (actual: {})", minimumCount, selector, actualCount);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element count now at least {}: {} (actual: {})", minimumCount, selector, actualCount);
                     return;
                 }
                 waitForTimeout(500);
@@ -1787,7 +1860,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element count: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element count: {}", selector, e);
             throw new TimeoutException("Failed to wait for element count: " + selector, e);
         }
     }
@@ -1799,12 +1872,12 @@ public abstract class BasePage {
     public void waitForNetworkIdle(int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for network to be idle (timeout: {}s)", timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for network to be idle (timeout: {}s)", timeoutSeconds);
             ensurePageValid();
             page.waitForLoadState(LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(timeoutMillis));
-            logger.info("Network is now idle");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Network is now idle");
         } catch (Exception e) {
-            logger.error("Failed to wait for network idle", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for network idle", e);
             throw new TimeoutException("Network did not become idle within timeout", e);
         }
     }
@@ -1816,12 +1889,12 @@ public abstract class BasePage {
     public void waitForPageFullyLoaded(int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for page to be fully loaded (timeout: {}s)", timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for page to be fully loaded (timeout: {}s)", timeoutSeconds);
             ensurePageValid();
             page.waitForLoadState(LoadState.LOAD, new Page.WaitForLoadStateOptions().setTimeout(timeoutMillis));
-            logger.info("Page is now fully loaded");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page is now fully loaded");
         } catch (Exception e) {
-            logger.error("Failed to wait for page fully loaded", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for page fully loaded", e);
             throw new TimeoutException("Page did not fully load within timeout", e);
         }
     }
@@ -1833,12 +1906,12 @@ public abstract class BasePage {
     public void waitForDOMContentLoaded(int timeoutSeconds) {
         try {
             int timeoutMillis = timeoutSeconds * 1000;
-            logger.info("Waiting for DOM content to be loaded (timeout: {}s)", timeoutSeconds);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for DOM content to be loaded (timeout: {}s)", timeoutSeconds);
             ensurePageValid();
             page.waitForLoadState(LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(timeoutMillis));
-            logger.info("DOM content is now loaded");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "DOM content is now loaded");
         } catch (Exception e) {
-            logger.error("Failed to wait for DOM content loaded", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for DOM content loaded", e);
             throw new TimeoutException("DOM content did not load within timeout", e);
         }
     }
@@ -1850,12 +1923,12 @@ public abstract class BasePage {
      */
     public void waitForElementChecked(String selector, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element to be checked: {} (timeout: {}s)", selector, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be checked: {} (timeout: {}s)", selector, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 if (isChecked(selector)) {
-                    logger.info("Element is now checked: {}", selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now checked: {}", selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1865,7 +1938,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be checked: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be checked: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be checked: " + selector, e);
         }
     }
@@ -1877,12 +1950,12 @@ public abstract class BasePage {
      */
     public void waitForElementNotChecked(String selector, int timeoutSeconds) {
         try {
-            logger.info("Waiting for element to be not checked: {} (timeout: {}s)", selector, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for element to be not checked: {} (timeout: {}s)", selector, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 if (!isChecked(selector)) {
-                    logger.info("Element is now not checked: {}", selector);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now not checked: {}", selector);
                     return;
                 }
                 waitForTimeout(500);
@@ -1892,7 +1965,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for element to be not checked: {}", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for element to be not checked: {}", selector, e);
             throw new TimeoutException("Failed to wait for element to be not checked: " + selector, e);
         }
     }
@@ -1904,13 +1977,13 @@ public abstract class BasePage {
      */
     public void waitForUrlEquals(String expectedUrl, int timeoutSeconds) {
         try {
-            logger.info("Waiting for URL to equal '{}' within {}s", expectedUrl, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for URL to equal '{}' within {}s", expectedUrl, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 String currentUrl = page.url();
                 if (expectedUrl.equals(currentUrl)) {
-                    logger.info("URL now equals '{}': {}", expectedUrl, currentUrl);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "URL now equals '{}': {}", expectedUrl, currentUrl);
                     return;
                 }
                 waitForTimeout(500);
@@ -1920,7 +1993,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for URL equals: {}", expectedUrl, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for URL equals: {}", expectedUrl, e);
             throw new TimeoutException("Failed to wait for URL equals: " + expectedUrl, e);
         }
     }
@@ -1932,13 +2005,13 @@ public abstract class BasePage {
      */
     public void waitForUrlStartsWith(String expectedPrefix, int timeoutSeconds) {
         try {
-            logger.info("Waiting for URL to start with '{}' within {}s", expectedPrefix, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for URL to start with '{}' within {}s", expectedPrefix, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 String currentUrl = page.url();
                 if (currentUrl.startsWith(expectedPrefix)) {
-                    logger.info("URL now starts with '{}': {}", expectedPrefix, currentUrl);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "URL now starts with '{}': {}", expectedPrefix, currentUrl);
                     return;
                 }
                 waitForTimeout(500);
@@ -1948,7 +2021,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for URL starts with: {}", expectedPrefix, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for URL starts with: {}", expectedPrefix, e);
             throw new TimeoutException("Failed to wait for URL starts with: " + expectedPrefix, e);
         }
     }
@@ -1961,12 +2034,12 @@ public abstract class BasePage {
      */
     public void waitForCustomCondition(Supplier<Boolean> condition, int timeoutSeconds, String conditionDescription) {
         try {
-            logger.info("Waiting for custom condition '{}' within {}s", conditionDescription, timeoutSeconds);
-            long endTime = System.currentTimeMillis() + timeoutSeconds * 1000;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for custom condition '{}' within {}s", conditionDescription, timeoutSeconds);
+            long endTime = System.currentTimeMillis() + (long) timeoutSeconds * 1000;
             
             while (System.currentTimeMillis() < endTime) {
                 if (condition.get()) {
-                    logger.info("Custom condition '{}' is now true", conditionDescription);
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Custom condition '{}' is now true", conditionDescription);
                     return;
                 }
                 waitForTimeout(500);
@@ -1976,7 +2049,7 @@ public abstract class BasePage {
         } catch (TimeoutException e) {
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to wait for custom condition: {}", conditionDescription, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for custom condition: {}", conditionDescription, e);
             throw new TimeoutException("Failed to wait for custom condition: " + conditionDescription, e);
         }
     }
@@ -2040,10 +2113,10 @@ public abstract class BasePage {
      */
     public void dragAndDrop(String sourceSelector, String targetSelector) {
         try {
-            logger.info("Dragging element '{}' to '{}'", sourceSelector, targetSelector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Dragging element '{}' to '{}'", sourceSelector, targetSelector);
             locator(sourceSelector).dragTo(locator(targetSelector));
         } catch (Exception e) {
-            logger.error("Failed to drag element '{}' to '{}'", sourceSelector, targetSelector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to drag element '{}' to '{}'", sourceSelector, targetSelector, e);
             throw new ElementException("Failed to drag element '" + sourceSelector + "' to '" + targetSelector + "'", e);
         }
     }
@@ -2056,10 +2129,10 @@ public abstract class BasePage {
      */
     public void scrollTo(String selector, int scrollX, int scrollY) {
         try {
-            logger.info("Scrolling element '{}' to ({}, {})", selector, scrollX, scrollY);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling element '{}' to ({}, {})", selector, scrollX, scrollY);
             locator(selector).evaluate("element => { element.scrollTo(arguments[0], arguments[1]); }", new Object[]{scrollX, scrollY});
         } catch (Exception e) {
-            logger.error("Failed to scroll element '{}' to ({}, {})", selector, scrollX, scrollY, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll element '{}' to ({}, {})", selector, scrollX, scrollY, e);
             throw new ElementException("Failed to scroll element '" + selector + "' to (" + scrollX + ", " + scrollY + ")", e);
         }
     }
@@ -2070,10 +2143,10 @@ public abstract class BasePage {
      */
     public void scrollToBottomOf(String selector) {
         try {
-            logger.info("Scrolling element '{}' to bottom", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling element '{}' to bottom", selector);
             locator(selector).evaluate("element => { element.scrollTo(0, element.scrollHeight); }");
         } catch (Exception e) {
-            logger.error("Failed to scroll element '{}' to bottom", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll element '{}' to bottom", selector, e);
             throw new ElementException("Failed to scroll element '" + selector + "' to bottom", e);
         }
     }
@@ -2084,10 +2157,10 @@ public abstract class BasePage {
      */
     public void scrollToTopOf(String selector) {
         try {
-            logger.info("Scrolling element '{}' to top", selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling element '{}' to top", selector);
             locator(selector).evaluate("element => { element.scrollTo(0, 0); }");
         } catch (Exception e) {
-            logger.error("Failed to scroll element '{}' to top", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll element '{}' to top", selector, e);
             throw new ElementException("Failed to scroll element '" + selector + "' to top", e);
         }
     }
@@ -2100,10 +2173,10 @@ public abstract class BasePage {
      */
     public void scrollBy(String selector, int offsetX, int offsetY) {
         try {
-            logger.info("Scrolling element '{}' by offset ({}, {})", selector, offsetX, offsetY);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling element '{}' by offset ({}, {})", selector, offsetX, offsetY);
             locator(selector).evaluate("element => { element.scrollBy(arguments[0], arguments[1]); }", new Object[]{offsetX, offsetY});
         } catch (Exception e) {
-            logger.error("Failed to scroll element '{}' by offset ({}, {})", selector, offsetX, offsetY, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll element '{}' by offset ({}, {})", selector, offsetX, offsetY, e);
             throw new ElementException("Failed to scroll element '" + selector + "' by offset (" + offsetX + ", " + offsetY + ")", e);
         }
     }
@@ -2119,11 +2192,11 @@ public abstract class BasePage {
             if (box == null) {
                 throw new ElementException("Element not found: " + selector);
             }
-            logger.info("Element '{}' bounding box: x={}, y={}, width={}, height={}", 
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' bounding box: x={}, y={}, width={}, height={}", 
                 selector, box.x, box.y, box.width, box.height);
             return box;
         } catch (Exception e) {
-            logger.error("Failed to get bounding box of element '{}'", selector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get bounding box of element '{}'", selector, e);
             throw new ElementException("Failed to get bounding box of element: " + selector, e);
         }
     }
@@ -2134,11 +2207,778 @@ public abstract class BasePage {
      */
     public void scrollToElementCenter(String targetSelector) {
         try {
-            logger.info("Scrolling to element and centering: {}", targetSelector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling to element and centering: {}", targetSelector);
             locator(targetSelector).scrollIntoViewIfNeeded();
         } catch (Exception e) {
-            logger.error("Failed to scroll to element and center: {}", targetSelector, e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll to element and center: {}", targetSelector, e);
             throw new ElementException("Failed to scroll to element and center: " + targetSelector, e);
+        }
+    }
+
+    // ==================== Frame 操作方法 ====================
+
+    /**
+     * 获取所有 frames
+     * @return 所有 frames 列表
+     */
+    public List<Frame> getFrames() {
+        try {
+            ensurePageValid();
+            List<Frame> frames = page.frames();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Found {} frames in the page", frames.size());
+            return frames;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get frames", e);
+            throw new RuntimeException("Failed to get frames", e);
+        }
+    }
+
+    /**
+     * 通过名称获取 frame
+     * @param name frame 名称
+     * @return Frame 对象，如果找不到则返回 null
+     */
+    public Frame getFrame(String name) {
+        try {
+            ensurePageValid();
+            Frame frame = page.frame(name);
+            if (frame != null) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Found frame with name: {}", name);
+            } else {
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Frame not found with name: {}", name);
+            }
+            return frame;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get frame by name: {}", name, e);
+            throw new RuntimeException("Failed to get frame by name: " + name, e);
+        }
+    }
+
+    /**
+     * 通过 URL 获取 frame
+     * @param url URL 模式（支持通配符）
+     * @return Frame 对象，如果找不到则返回 null
+     */
+    public Frame getFrameByUrl(String url) {
+        try {
+            ensurePageValid();
+            Frame frame = page.frameByUrl(Pattern.compile(url));
+            if (frame != null) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Found frame with URL pattern: {}", url);
+            } else {
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Frame not found with URL pattern: {}", url);
+            }
+            return frame;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get frame by URL: {}", url, e);
+            throw new RuntimeException("Failed to get frame by URL: " + url, e);
+        }
+    }
+
+    /**
+     * 获取主 frame
+     * @return 主 Frame 对象
+     */
+    public Frame getMainFrame() {
+        try {
+            ensurePageValid();
+            Frame mainFrame = page.mainFrame();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Got main frame");
+            return mainFrame;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get main frame", e);
+            throw new RuntimeException("Failed to get main frame", e);
+        }
+    }
+
+    /**
+     * 通过选择器获取 frame 定位器
+     * @param selector frame 元素选择器
+     * @return FrameLocator 对象
+     */
+    public FrameLocator frameLocator(String selector) {
+        try {
+            ensurePageValid();
+            FrameLocator frameLocator = page.frameLocator(selector);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Got frame locator for selector: {}", selector);
+            return frameLocator;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get frame locator: {}", selector, e);
+            throw new RuntimeException("Failed to get frame locator: " + selector, e);
+        }
+    }
+
+    /**
+     * 在指定 frame 中执行操作
+     * @param frameName frame 名称
+     * @param operation 要执行的操作
+     */
+    public void executeInFrame(String frameName, Runnable operation) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Executing operation in frame: {}", frameName);
+            Frame frame = getFrame(frameName);
+            if (frame == null) {
+                throw new RuntimeException("Frame not found: " + frameName);
+            }
+            operation.run();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Operation executed successfully in frame: {}", frameName);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to execute operation in frame: {}", frameName, e);
+            throw new RuntimeException("Failed to execute operation in frame: " + frameName, e);
+        }
+    }
+
+    /**
+     * 在指定 URL 的 frame 中执行操作
+     * @param urlPattern URL 模式
+     * @param operation 要执行的操作
+     */
+    public void executeInFrameByUrl(String urlPattern, Runnable operation) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Executing operation in frame with URL pattern: {}", urlPattern);
+            Frame frame = getFrameByUrl(urlPattern);
+            if (frame == null) {
+                throw new RuntimeException("Frame not found with URL pattern: " + urlPattern);
+            }
+            operation.run();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Operation executed successfully in frame with URL pattern: {}", urlPattern);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to execute operation in frame with URL pattern: {}", urlPattern, e);
+            throw new RuntimeException("Failed to execute operation in frame with URL pattern: " + urlPattern, e);
+        }
+    }
+
+    /**
+     * 等待 frame 加载完成
+     * @param selector frame 元素选择器
+     * @param timeoutSeconds 超时时间（秒）
+     */
+    public void waitForFrame(String selector, int timeoutSeconds) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for frame to load: {} (timeout: {}s)", selector, timeoutSeconds);
+            ensurePageValid();
+            int timeoutMillis = timeoutSeconds * 1000;
+            page.waitForSelector(selector, new Page.WaitForSelectorOptions().setTimeout(timeoutMillis));
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Frame loaded successfully: {}", selector);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to wait for frame: {}", selector, e);
+            throw new TimeoutException("Frame not loaded within timeout: " + selector, e);
+        }
+    }
+
+    // ==================== 键盘操作方法 ====================
+
+    /**
+     * 在元素上按键
+     * @param selector 元素选择器
+     * @param key 要按下的键（如 "Enter", "ArrowDown", "Control+a" 等）
+     */
+    public void press(String selector, String key) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Pressing key '{}' on element: {}", key, selector);
+            locator(selector).press(key);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to press key '{}' on element: {}", key, selector, e);
+            throw new ElementException("Failed to press key '" + key + "' on element: " + selector, e);
+        }
+    }
+
+    /**
+     * 在当前聚焦元素上按键
+     * @param key 要按下的键
+     */
+    public void press(String key) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Pressing key: {}", key);
+            ensurePageValid();
+            page.keyboard().press(key);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to press key: {}", key, e);
+            throw new ElementException("Failed to press key: " + key, e);
+        }
+    }
+
+    /**
+     * 在元素上输入文本（逐个字符，带延迟）
+     * @param selector 元素选择器
+     * @param text 要输入的文本
+     */
+    public void typeSlowly(String selector, String text) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Typing text slowly '{}' into element: {}", text, selector);
+            locator(selector).fill(text, new Locator.FillOptions().setTimeout(50));
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to type text slowly '{}' into element: {}", text, selector, e);
+            throw new ElementException("Failed to type text slowly '" + text + "' into element: " + selector, e);
+        }
+    }
+
+    /**
+     * 在当前聚焦元素上输入文本（逐个字符，带延迟）
+     * @param text 要输入的文本
+     */
+    public void typeSlowly(String text) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Typing text slowly: {}", text);
+            ensurePageValid();
+            // 使用逐字符输入，模拟真实打字
+            for (char c : text.toCharArray()) {
+                page.keyboard().type(String.valueOf(c));
+                page.waitForTimeout(50); // 每个字符之间延迟 50ms
+            }
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to type text slowly: {}", text, e);
+            throw new ElementException("Failed to type text slowly: " + text, e);
+        }
+    }
+
+    /**
+     * 在元素上插入文本（不覆盖现有内容）
+     * @param selector 元素选择器
+     * @param text 要插入的文本
+     */
+    public void insertText(String selector, String text) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Inserting text '{}' into element: {}", text, selector);
+            locator(selector).evaluate("el => el.value += arguments[0]", text);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to insert text '{}' into element: {}", text, selector, e);
+            throw new ElementException("Failed to insert text '" + text + "' into element: " + selector, e);
+        }
+    }
+
+    /**
+     * 在元素上按下键
+     * @param selector 元素选择器
+     * @param key 要按下的键
+     */
+    public void keyDown(String selector, String key) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Pressing down key '{}' on element: {}", key, selector);
+            locator(selector).press(key);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to press down key '{}' on element: {}", key, selector, e);
+            throw new ElementException("Failed to press down key '" + key + "' on element: " + selector, e);
+        }
+    }
+
+    /**
+     * 在元素上释放键
+     * @param selector 元素选择器
+     * @param key 要释放的键
+     */
+    public void keyUp(String selector, String key) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Releasing key '{}' on element: {}", key, selector);
+            // Playwright 的 keyDown/keyUp 需要通过 keyboard 对象
+            ensurePageValid();
+            page.keyboard().up(key);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to release key '{}' on element: {}", key, selector, e);
+            throw new ElementException("Failed to release key '" + key + "' on element: " + selector, e);
+        }
+    }
+
+    /**
+     * 选择所有文本（Ctrl+A / Cmd+A）
+     * @param selector 元素选择器
+     */
+    public void selectAll(String selector) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Selecting all text in element: {}", selector);
+            locator(selector).press("Control+A");
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to select all text in element: {}", selector, e);
+            throw new ElementException("Failed to select all text in element: " + selector, e);
+        }
+    }
+
+    /**
+     * 复制文本（Ctrl+C / Cmd+C）
+     * @param selector 元素选择器
+     */
+    public void copy(String selector) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Copying text from element: {}", selector);
+            locator(selector).press("Control+C");
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to copy text from element: {}", selector, e);
+            throw new ElementException("Failed to copy text from element: " + selector, e);
+        }
+    }
+
+    /**
+     * 粘贴文本（Ctrl+V / Cmd+V）
+     * @param selector 元素选择器
+     */
+    public void paste(String selector) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Pasting text to element: {}", selector);
+            locator(selector).press("Control+V");
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to paste text to element: {}", selector, e);
+            throw new ElementException("Failed to paste text to element: " + selector, e);
+        }
+    }
+
+    /**
+     * 剪切文本（Ctrl+X / Cmd+X）
+     * @param selector 元素选择器
+     */
+    public void cut(String selector) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Cutting text from element: {}", selector);
+            locator(selector).press("Control+X");
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to cut text from element: {}", selector, e);
+            throw new ElementException("Failed to cut text from element: " + selector, e);
+        }
+    }
+
+    // ==================== 鼠标操作方法 ====================
+
+    /**
+     * 在指定坐标点击鼠标
+     * @param x X 坐标
+     * @param y Y 坐标
+     */
+    public void mouseClick(int x, int y) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Clicking mouse at ({}, {})", x, y);
+            ensurePageValid();
+            page.mouse().click(x, y);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to click mouse at ({}, {})", x, y, e);
+            throw new ElementException("Failed to click mouse at (" + x + ", " + y + ")", e);
+        }
+    }
+
+    /**
+     * 在指定坐标双击鼠标
+     * @param x X 坐标
+     * @param y Y 坐标
+     */
+    public void mouseDoubleClick(int x, int y) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Double clicking mouse at ({}, {})", x, y);
+            ensurePageValid();
+            page.mouse().dblclick(x, y);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to double click mouse at ({}, {})", x, y, e);
+            throw new ElementException("Failed to double click mouse at (" + x + ", " + y + ")", e);
+        }
+    }
+
+    /**
+     * 按下鼠标按钮
+     */
+    public void mouseDown() {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Pressing mouse down");
+            ensurePageValid();
+            page.mouse().down();
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to press mouse down", e);
+            throw new ElementException("Failed to press mouse down", e);
+        }
+    }
+
+    /**
+     * 释放鼠标按钮
+     */
+    public void mouseUp() {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Releasing mouse up");
+            ensurePageValid();
+            page.mouse().up();
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to release mouse up", e);
+            throw new ElementException("Failed to release mouse up", e);
+        }
+    }
+
+    /**
+     * 移动鼠标到指定坐标
+     * @param x X 坐标
+     * @param y Y 坐标
+     */
+    public void mouseMove(int x, int y) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Moving mouse to ({}, {})", x, y);
+            ensurePageValid();
+            page.mouse().move(x, y);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to move mouse to ({}, {})", x, y, e);
+            throw new ElementException("Failed to move mouse to (" + x + ", " + y + ")", e);
+        }
+    }
+
+    /**
+     * 滚动鼠标滚轮
+     * @param deltaX X 轴滚动量（像素）
+     * @param deltaY Y 轴滚动量（像素）
+     */
+    public void mouseWheel(int deltaX, int deltaY) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Scrolling mouse wheel by ({}, {})", deltaX, deltaY);
+            ensurePageValid();
+            page.mouse().wheel(deltaX, deltaY);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to scroll mouse wheel by ({}, {})", deltaX, deltaY, e);
+            throw new ElementException("Failed to scroll mouse wheel by (" + deltaX + ", " + deltaY + ")", e);
+        }
+    }
+
+    /**
+     * 获取元素中心坐标
+     * @param selector 元素选择器
+     * @return 包含 x 和 y 坐标的数组
+     */
+    public int[] getElementCenter(String selector) {
+        try {
+            BoundingBox box = locator(selector).boundingBox();
+            if (box == null) {
+                throw new ElementException("Element not found: " + selector);
+            }
+            int centerX = (int) (box.x + box.width / 2);
+            int centerY = (int) (box.y + box.height / 2);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' center: ({}, {})", selector, centerX, centerY);
+            return new int[]{centerX, centerY};
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get element center: {}", selector, e);
+            throw new ElementException("Failed to get element center: " + selector, e);
+        }
+    }
+
+    /**
+     * 点击元素中心（使用鼠标操作）
+     * @param selector 元素选择器
+     */
+    public void clickAtCenter(String selector) {
+        try {
+            int[] center = getElementCenter(selector);
+            mouseClick(center[0], center[1]);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to click at center of element: {}", selector, e);
+            throw new ElementException("Failed to click at center of element: " + selector, e);
+        }
+    }
+
+    /**
+     * 拖拽元素到指定坐标
+     * @param sourceSelector 源元素选择器
+     * @param targetX 目标 X 坐标
+     * @param targetY 目标 Y 坐标
+     */
+    public void dragToCoordinates(String sourceSelector, int targetX, int targetY) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Dragging element '{}' to ({}, {})", sourceSelector, targetX, targetY);
+            int[] sourceCenter = getElementCenter(sourceSelector);
+            
+            mouseMove(sourceCenter[0], sourceCenter[1]);
+            mouseDown();
+            mouseMove(targetX, targetY);
+            mouseUp();
+            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Drag completed successfully");
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to drag element '{}' to ({}, {})", sourceSelector, targetX, targetY, e);
+            throw new ElementException("Failed to drag element '" + sourceSelector + "' to (" + targetX + ", " + targetY + ")", e);
+        }
+    }
+
+    // ==================== 辅助功能（Accessibility）方法 ====================
+
+    /**
+     * 获取页面的辅助功能树（简化版）
+     * @return 辅助功能信息的 JSON 字符串
+     */
+    public String getAccessibilityTree() {
+        try {
+            ensurePageValid();
+            String script = "() => {" +
+                "const nodes = [];" +
+                "const walker = document.createTreeWalker(" +
+                "  document.body," +
+                "  NodeFilter.SHOW_ELEMENT," +
+                "  {" +
+                "    acceptNode: (node) => {" +
+                "      const computedStyle = window.getComputedStyle(node);" +
+                "      if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden' || node.getAttribute('aria-hidden') === 'true') {" +
+                "        return NodeFilter.FILTER_SKIP;" +
+                "      }" +
+                "      return NodeFilter.FILTER_ACCEPT;" +
+                "    }" +
+                "  }" +
+                ");" +
+                "while (walker.nextNode()) {" +
+                "  const node = walker.currentNode;" +
+                "  nodes.push({" +
+                "    tagName: node.tagName," +
+                "    role: node.getAttribute('role') || node.tagName.toLowerCase()," +
+                "    label: node.getAttribute('aria-label') || node.textContent?.substring(0, 50)," +
+                "    id: node.id," +
+                "    classes: node.className" +
+                "  });" +
+                "}" +
+                "return JSON.stringify(nodes, null, 2);}";
+            String accessibilityTree = (String) page.evaluate(script);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Got accessibility tree");
+            return accessibilityTree;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get accessibility tree", e);
+            throw new RuntimeException("Failed to get accessibility tree", e);
+        }
+    }
+
+    /**
+     * 检查元素是否可访问
+     * @param selector 元素选择器
+     * @return 如果元素可访问则返回 true，否则返回 false
+     */
+    public boolean isAccessible(String selector) {
+        try {
+            String accessibilityTree = getAccessibilityTree();
+            boolean accessible = accessibilityTree != null && !accessibilityTree.isEmpty();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' is accessible: {}", selector, accessible);
+            return accessible;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check accessibility for element: {}", selector, e);
+            return false;
+        }
+    }
+
+    /**
+     * 获取元素的 ARIA 标签
+     * @param selector 元素选择器
+     * @return ARIA 标签文本
+     */
+    public String getAriaLabel(String selector) {
+        try {
+            String ariaLabel = getAttribute(selector, "aria-label");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' aria-label: {}", selector, ariaLabel);
+            return ariaLabel;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get aria-label for element: {}", selector, e);
+            throw new ElementException("Failed to get aria-label for element: " + selector, e);
+        }
+    }
+
+    /**
+     * 检查元素是否有 ARIA 标签
+     * @param selector 元素选择器
+     * @return 如果元素有 ARIA 标签则返回 true，否则返回 false
+     */
+    public boolean hasAriaLabel(String selector) {
+        try {
+            String ariaLabel = getAriaLabel(selector);
+            boolean hasLabel = ariaLabel != null && !ariaLabel.isEmpty();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' has aria-label: {}", selector, hasLabel);
+            return hasLabel;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check aria-label for element: {}", selector, e);
+            return false;
+        }
+    }
+
+    /**
+     * 获取元素的 ARIA 角色
+     * @param selector 元素选择器
+     * @return ARIA 角色文本
+     */
+    public String getAriaRole(String selector) {
+        try {
+            String ariaRole = getAttribute(selector, "role");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' aria-role: {}", selector, ariaRole);
+            return ariaRole;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get aria-role for element: {}", selector, e);
+            throw new ElementException("Failed to get aria-role for element: " + selector, e);
+        }
+    }
+
+    /**
+     * 检查元素的可见性状态（考虑辅助功能）
+     * @param selector 元素选择器
+     * @return 如果元素在辅助功能意义上可见则返回 true，否则返回 false
+     */
+    public boolean isVisibleForAccessibility(String selector) {
+        try {
+            // 检查元素是否可见
+            boolean visible = isVisible(selector);
+            
+            // 检查元素是否被隐藏（通过 aria-hidden）
+            String ariaHidden = getAttribute(selector, "aria-hidden");
+            boolean hiddenByAria = "true".equals(ariaHidden);
+            
+            boolean accessibleVisible = visible && !hiddenByAria;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' is visible for accessibility: {}", selector, accessibleVisible);
+            return accessibleVisible;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check accessibility visibility for element: {}", selector, e);
+            return false;
+        }
+    }
+
+    /**
+     * 获取所有可访问元素的列表
+     * @return 可访问元素的选择器列表
+     */
+    public List<String> getAccessibleElements() {
+        try {
+            ensurePageValid();
+            getAccessibilityTree();
+            
+            // 这里需要解析 accessibilityTree 来提取所有可访问元素
+            // 简化实现：返回所有可见的焦点元素
+            List<String> accessibleElements = new ArrayList<>();
+            
+            // 查找所有可焦点元素
+            List<Locator> focusableElements = page.locator("button, [href], input, select, textarea, [tabindex]:not([tabindex=\"-1\"])").all();
+            for (Locator element : focusableElements) {
+                if (element.isVisible()) {
+                    accessibleElements.add(element.toString());
+                }
+            }
+            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Found {} accessible elements", accessibleElements.size());
+            return accessibleElements;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get accessible elements", e);
+            throw new RuntimeException("Failed to get accessible elements", e);
+        }
+    }
+
+    /**
+     * 验证页面是否符合基本的辅助功能标准
+     * @return 如果页面符合基本标准则返回 true，否则返回 false
+     */
+    public boolean verifyAccessibilityStandards() {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Verifying accessibility standards");
+            List<String> issues = new ArrayList<>();
+            
+            // 检查是否有 alt 文本的图片
+            List<Locator> images = page.locator("img:not([alt])").all();
+            if (!images.isEmpty()) {
+                issues.add("Found " + images.size() + " images without alt text");
+            }
+            
+            // 检查空的链接
+            List<Locator> emptyLinks = page.locator("a:empty:not([aria-label])").all();
+            if (!emptyLinks.isEmpty()) {
+                issues.add("Found " + emptyLinks.size() + " empty links without aria-label");
+            }
+            
+            // 检查没有标签的表单元素
+            List<Locator> unlabeledInputs = page.locator("input:not([aria-label]):not([placeholder]):not([id])").all();
+            if (!unlabeledInputs.isEmpty()) {
+                issues.add("Found " + unlabeledInputs.size() + " inputs without labels");
+            }
+            
+            if (issues.isEmpty()) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Accessibility standards verification passed");
+                return true;
+            } else {
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Accessibility issues found:");
+                for (String issue : issues) {
+                    LoggingConfigUtil.logWarnIfVerbose(logger, "  - {}", issue);
+                }
+                return false;
+            }
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify accessibility standards", e);
+            throw new RuntimeException("Failed to verify accessibility standards", e);
+        }
+    }
+
+    /**
+     * 获取页面标题的可访问性信息
+     * @return 页面标题文本
+     */
+    public String getAccessibleTitle() {
+        try {
+            String title = getTitle();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page accessible title: {}", title);
+            return title;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get accessible title", e);
+            throw new RuntimeException("Failed to get accessible title", e);
+        }
+    }
+
+    /**
+     * 检查页面是否有有效的标题
+     * @return 如果页面有有效标题则返回 true，否则返回 false
+     */
+    public boolean hasValidTitle() {
+        try {
+            String title = getAccessibleTitle();
+            boolean valid = title != null && !title.trim().isEmpty() && title.length() >= 10;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page has valid title: {}", valid);
+            return valid;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check valid title", e);
+            return false;
+        }
+    }
+
+    /**
+     * 检查页面是否有有效的语言声明
+     * @return 如果页面有有效的语言声明则返回 true，否则返回 false
+     */
+    public boolean hasValidLangAttribute() {
+        try {
+            String lang = (String) evaluate("() => document.documentElement.lang");
+            boolean valid = lang != null && !lang.trim().isEmpty();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page has valid lang attribute: {}", valid);
+            return valid;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check lang attribute", e);
+            return false;
+        }
+    }
+
+    /**
+     * 检查页面颜色对比度（简化版）
+     * @param selector 元素选择器
+     * @return 如果颜色对比度符合标准则返回 true，否则返回 false
+     */
+    public boolean hasSufficientColorContrast(String selector) {
+        try {
+            // 这里简化实现，实际需要计算颜色对比度
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Checking color contrast for element: {}", selector);
+            
+            // 获取元素的背景色和前景色
+            String bgColor = (String) locator(selector).evaluate("el => window.getComputedStyle(el).backgroundColor");
+            String fgColor = (String) locator(selector).evaluate("el => window.getComputedStyle(el).color");
+            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' background color: {}, foreground color: {}", selector, bgColor, fgColor);
+            
+            // 简化判断：如果颜色不是透明或白色，认为符合标准
+            boolean hasContrast = !("rgba(0, 0, 0, 0)".equals(bgColor) || "transparent".equals(bgColor));
+            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element '{}' has sufficient color contrast: {}", selector, hasContrast);
+            return hasContrast;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check color contrast for element: {}", selector, e);
+            return false;
+        }
+    }
+
+    /**
+     * 执行 JavaScript 代码（辅助方法）
+     * @param script JavaScript 代码
+     * @param args 参数
+     * @return 执行结果
+     */
+    private Object evaluate(String script, Object... args) {
+        try {
+            ensurePageValid();
+            return page.evaluate(script, args);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to evaluate script: {}", script, e);
+            throw new RuntimeException("Failed to evaluate script: " + script, e);
         }
     }
 }

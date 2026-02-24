@@ -7,7 +7,6 @@ import com.hsbc.cmb.hk.dbb.automation.tests.pages.HomePage;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.LoginPage;
 import com.hsbc.cmb.hk.dbb.automation.tests.utils.BDDUtils;
 import net.serenitybdd.annotations.Step;
-
 /**
  * Login related test steps - supports skip login functionality
  *
@@ -17,7 +16,6 @@ import net.serenitybdd.annotations.Step;
  * - Support Cookie and LocalStorage persistence
  */
 public class LoginSteps {
-
     private static final LoginPage loginPage = PageObjectFactory.getPage(LoginPage.class);
     private static final HomePage homePage = PageObjectFactory.getPage(HomePage.class);
     private String currentUrl;
@@ -32,7 +30,6 @@ public class LoginSteps {
      *
      * Session key format: env_username_browser (e.g., O88_SIT1_AABBCCDD_chromium)
      * This allows the same username to have different sessions in different environments and browsers
-     *
      * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1, O38_SIT1)
      * @param username Username (e.g., AABBCCDD, ABCDEW)
      */
@@ -57,7 +54,8 @@ public class LoginSteps {
                 if (homeUrl != null && !homeUrl.isEmpty()) {
                     System.out.println("Navigating to saved home URL: " + homeUrl);
                     loginPage.navigateTo(homeUrl);
-                    homePage.waitForElementVisibleWithinTime(HomePage.quickLink, 20);
+//                    homePage.waitForElementVisibleWithinTime(homePage.quickLink, 20);
+                    homePage.quickLink.waitForVisible(20);
                     System.out.println("Skip login successful - user already logged in and navigated to home page");
                 } else {
                     // Fallback: navigate to login page and refresh
@@ -84,16 +82,15 @@ public class LoginSteps {
         String browserType = BrowserOverrideManager.getEffectiveBrowserType();
         String sessionKey = env + "_" + username + "_" + browserType;
         System.out.println("Performing login for: " + sessionKey);
-
         loginPage.navigateTo(currentUrl);
-        loginPage.type(LoginPage.USERNAME_INPUT, username);
-        loginPage.click(LoginPage.NEXT_BUTTON);
-        loginPage.type(LoginPage.PASSWORD_INPUT, BDDUtils.getCurrentPassword());
-        loginPage.click(LoginPage.PHYSICAL_DEVICE_LABEL);
-        loginPage.type(LoginPage.SECURITY_CODE_INPUT, BDDUtils.getSecurityCode(BDDUtils.getCurrentSecurityUrl()));
-        loginPage.click(LoginPage.LOGIN_BUTTON);
-        loginPage.waitForElementNotVisible(LoginPage.LOGIN_BUTTON, 30);
-        homePage.waitForElementVisibleWithinTime(HomePage.quickLink, 30);
+        loginPage.USERNAME_INPUT.type(username);
+        loginPage.NEXT_BUTTON.click();
+        loginPage.PASSWORD_INPUT.type(BDDUtils.getCurrentPassword());
+        loginPage.PHYSICAL_DEVICE_LABEL.click();
+        loginPage.SECURITY_CODE_INPUT.type(BDDUtils.getSecurityCode(BDDUtils.getCurrentSecurityUrl()));
+        loginPage.LOGIN_BUTTON.click();
+        loginPage.LOGIN_BUTTON.waitForNotVisible(30);
+        homePage.quickLink.waitForVisible(30);
         // Get home page URL after successful login
         String homeUrl = loginPage.getCurrentUrl();
         // Mark user as logged in and save session with home URL

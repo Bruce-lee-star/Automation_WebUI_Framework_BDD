@@ -4,9 +4,9 @@ import org.junit.runner.RunWith;
 
 @RunWith(CucumberWithSerenity.class)
 @CucumberOptions(
-        features = "src/test/resources/features/web",
+        features = "src/test/resources/features",
         glue = {
-            "com.hsbc.cmb.hk.dbb.automation.tests.web.steps",
+            "com.hsbc.cmb.hk.dbb.automation.tests.glue",
         },
         plugin = {
             "pretty",
@@ -14,9 +14,8 @@ import org.junit.runner.RunWith;
             "json:target/cucumber-report.json",
             "rerun:target/rerun.txt"
         },
-        monochrome = true,
         dryRun = false,
-        tags = "@test11"
+        tags = "@test"
 )
 public class CucumberTestRunnerIT {
 
