@@ -25,14 +25,14 @@ public class FrameworkCore {
     static {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
-                logger.info("🚨 JVM Shutdown Hook: Cleaning up resources...");
+                LoggingConfigUtil.logInfoIfVerbose(logger, "JVM Shutdown Hook: Cleaning up resources...");
                 if (frameworkState.isInitialized()) {
                     PlaywrightManager.cleanupAll();
                     frameworkState.cleanup();
                 }
-                logger.info("✅ JVM Shutdown Hook completed");
+                LoggingConfigUtil.logInfoIfVerbose(logger,"JVM Shutdown Hook completed");
             } catch (Exception e) {
-                logger.error("❌ Error during JVM shutdown cleanup", e);
+                LoggingConfigUtil.logErrorIfVerbose(logger,"Error during JVM shutdown cleanup", e);
             }
         }));
     }
@@ -54,7 +54,7 @@ public class FrameworkCore {
                 return;
             }
 
-            logger.info("🚀 Initializing FrameworkCore...");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "🚀 Initializing FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework initialization process");
 
             // 初始化框架状态
@@ -70,9 +70,9 @@ public class FrameworkCore {
             ListenerRegistry.initialize(basePackage);
             LoggingConfigUtil.logDebugIfVerbose(logger, "Listener registry initialized for package: {}", basePackage);
 
-            logger.info("✅ FrameworkCore initialized successfully");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ FrameworkCore initialized successfully");
         } catch (Exception e) {
-            logger.error("❌ Failed to initialize FrameworkCore", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to initialize FrameworkCore", e);
             frameworkState.setLastException(e);
             throw new InitializationException("Failed to initialize FrameworkCore", e);
         }
@@ -86,7 +86,7 @@ public class FrameworkCore {
                 return;
             }
 
-            logger.info("🚀 Initializing FrameworkCore with custom listener packages...");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "🚀 Initializing FrameworkCore with custom listener packages...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework initialization with custom packages");
 
             // 初始化框架状态
@@ -97,9 +97,9 @@ public class FrameworkCore {
             PlaywrightManager.initialize();
             LoggingConfigUtil.logDebugIfVerbose(logger, "Playwright manager initialized");
 
-            logger.info("✅ FrameworkCore initialized successfully");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ FrameworkCore initialized successfully");
         } catch (Exception e) {
-            logger.error("❌ Failed to initialize FrameworkCore", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to initialize FrameworkCore", e);
             frameworkState.setLastException(e);
             throw new InitializationException("Failed to initialize FrameworkCore", e);
         }
@@ -111,22 +111,22 @@ public class FrameworkCore {
             if (!frameworkState.isInitialized()) {
                 initialize();
             }
-            
+
             if (frameworkState.isRunning()) {
                 LoggingConfigUtil.logInfoIfVerbose(logger, "FrameworkCore is already running");
                 return;
             }
-            
-            logger.info("▶️ Starting FrameworkCore...");
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "▶️ Starting FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework core");
-            
+
             // 标记框架为运行状态
             frameworkState.start();
             LoggingConfigUtil.logDebugIfVerbose(logger, "Framework state set to running");
-            
-            logger.info("✅ FrameworkCore started successfully");
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ FrameworkCore started successfully");
         } catch (Exception e) {
-            logger.error("❌ Failed to start FrameworkCore", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to start FrameworkCore", e);
             frameworkState.setLastException(e);
             throw new InitializationException("Failed to start FrameworkCore", e);
         }
@@ -139,17 +139,17 @@ public class FrameworkCore {
                 LoggingConfigUtil.logInfoIfVerbose(logger, "FrameworkCore is not running");
                 return;
             }
-            
-            logger.info("⏹️ Stopping FrameworkCore...");
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "⏹️ Stopping FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Stopping framework core");
-            
+
             // 标记框架为停止状态
             frameworkState.stop();
             LoggingConfigUtil.logDebugIfVerbose(logger, "Framework state set to stopped");
-            
-            logger.info("✅ FrameworkCore stopped successfully");
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ FrameworkCore stopped successfully");
         } catch (Exception e) {
-            logger.error("❌ Failed to stop FrameworkCore", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to stop FrameworkCore", e);
             frameworkState.setLastException(e);
             throw new InitializationException("Failed to stop FrameworkCore", e);
         }
@@ -162,27 +162,27 @@ public class FrameworkCore {
                 LoggingConfigUtil.logInfoIfVerbose(logger, "FrameworkCore is not initialized");
                 return;
             }
-            
-            logger.info("🧹 Cleaning up FrameworkCore...");
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "🧹 Cleaning up FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework cleanup");
-            
+
             // 停止框架
             if (frameworkState.isRunning()) {
                 stop();
                 LoggingConfigUtil.logDebugIfVerbose(logger, "Framework stopped during cleanup");
             }
-            
+
             // 🔧 关键修复：清理所有 Playwright 资源（包括浏览器进程）
             PlaywrightManager.cleanupAll();
             LoggingConfigUtil.logDebugIfVerbose(logger, "Playwright resources cleaned up");
-            
+
             // 清理框架状态
             frameworkState.cleanup();
             LoggingConfigUtil.logDebugIfVerbose(logger, "Framework state cleaned up");
-            
-            logger.info("✅ FrameworkCore cleaned up successfully");
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ FrameworkCore cleaned up successfully");
         } catch (Exception e) {
-            logger.error("❌ Failed to cleanup FrameworkCore", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to cleanup FrameworkCore", e);
             frameworkState.setLastException(e);
             throw new InitializationException("Failed to cleanup FrameworkCore", e);
         }
@@ -192,24 +192,24 @@ public class FrameworkCore {
     public void beforeTest() {
         try {
             LoggingConfigUtil.logDebugIfVerbose(logger, "🔍 Preparing for test execution...");
-            
+
             // 确保框架已初始化
             if (!frameworkState.isInitialized()) {
                 initialize();
             }
-            
+
             // 确保框架已启动
             if (!frameworkState.isRunning()) {
                 start();
             }
-            
+
             // 初始化Playwright实例
             PlaywrightManager.initializeForScenario();
             LoggingConfigUtil.logDebugIfVerbose(logger, "Playwright initialized for scenario");
-            
+
             LoggingConfigUtil.logDebugIfVerbose(logger, "✅ Test preparation completed");
         } catch (Exception e) {
-            logger.error("❌ Failed to prepare for test", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to prepare for test", e);
             frameworkState.setLastException(e);
             throw new InitializationException("Failed to prepare for test", e);
         }
@@ -219,14 +219,14 @@ public class FrameworkCore {
     public void afterTest() {
         try {
             LoggingConfigUtil.logDebugIfVerbose(logger, "🧹 Cleaning up after test execution...");
-            
+
             // 清理Playwright资源
             PlaywrightManager.cleanupForScenario();
             LoggingConfigUtil.logDebugIfVerbose(logger, "Playwright resources cleaned up for scenario");
-            
+
             LoggingConfigUtil.logDebugIfVerbose(logger, "✅ Test cleanup completed");
         } catch (Exception e) {
-            logger.error("❌ Failed to cleanup after test", e);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to cleanup after test", e);
             frameworkState.setLastException(e);
             // 不抛出异常，避免影响测试报告
         }
@@ -256,14 +256,14 @@ public class FrameworkCore {
     
     // 全局异常处理
     public static void handleException(Exception e) {
-        logger.error("❌ Exception occurred in FrameworkCore", e);
+        LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Exception occurred in FrameworkCore", e);
         frameworkState.setLastException(e);
-        
+
         // 尝试清理资源
         try {
             FrameworkCore.getInstance().cleanup();
         } catch (Exception cleanupException) {
-            logger.error("❌ Failed to cleanup resources after exception", cleanupException);
+            LoggingConfigUtil.logErrorIfVerbose(logger, "❌ Failed to cleanup resources after exception", cleanupException);
         }
     }
 }

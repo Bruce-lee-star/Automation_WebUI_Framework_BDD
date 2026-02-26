@@ -20,11 +20,6 @@ public class RestPutJob extends AbstractRestJob {
 
     @Override
     public void perform(final Entity entity) {
-        if(entity.getEndpoint() == null || entity.getEndpoint().isEmpty()){
-            final String msg = FrameworkConfig.getEndpointNullErrorMessage("PUT");
-            LOGGER.error(msg, new IllegalArgumentException(msg));
-            return;
-        }
         final RequestSpecification requestSpecification = SerenityRest.given()
                 .baseUri(entity.getBaseUri())
                 .basePath(entity.getBasePath())
@@ -56,7 +51,7 @@ public class RestPutJob extends AbstractRestJob {
         this.setValidatableResponse(response);
         entity.setResponseCode(response.extract().statusCode());
         entity.setResponseCookies(response.extract().response().cookies());
-        entity.setResponsePayload(response.extract().response().body().toString());
+        entity.setResponsePayload(response.extract().response().body().asString());
         Headers headers = response.extract().response().headers();
         if(headers != null){
             Map<String, String> responseHeader = new HashMap<>();

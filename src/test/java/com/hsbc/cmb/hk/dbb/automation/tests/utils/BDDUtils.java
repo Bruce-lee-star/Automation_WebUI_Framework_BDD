@@ -1,9 +1,13 @@
 package com.hsbc.cmb.hk.dbb.automation.tests.utils;
 
+import com.hsbc.cmb.hk.dbb.automation.framework.api.core.services.TestServices;
+import com.hsbc.cmb.hk.dbb.automation.framework.api.core.step.BaseStep;
 import io.restassured.RestAssured;
 import io.restassured.response.Response;
+import net.serenitybdd.rest.SerenityRest;
 import net.thucydides.model.environment.SystemEnvironmentVariables;
 import net.thucydides.model.util.EnvironmentVariables;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -216,34 +220,31 @@ public class BDDUtils {
 
     public static String getSecurityCode(String securityUrl) {
         try {
-            // Send GET request using RestAssured
+            // Send GET request using framework's getFullUrl method
             logger.debug("Sending GET request to: {}", securityUrl);
-            Response response = RestAssured
-                .given()
-                    .log().ifValidationFails()
-                .when()
-                    .get(securityUrl)
-                .then()
-                    .log().ifValidationFails()
-                    .extract()
-                    .response();
+            BaseStep baseStep = TestServices.initialize().baseStep();
+            baseStep.getFullUrl(securityUrl);
 
             // Log response details
-            int statusCode = response.getStatusCode();
-            String responseBody = response.getBody().asString();
+            int statusCode = baseStep.getResponseCode();
+            String responseBody = baseStep.getResponseJson();
 
             logger.info("GET request completed - Status Code: {}", statusCode);
-            logger.debug("Response Body: {}", responseBody);
+            logger.info("Response Body: {}", responseBody);
 
             // Check if request was successful
             if (statusCode >= 200 && statusCode < 300) {
+                // Handle HTML-wrapped JSON response
+                String jsonContent = extractJsonFromHtml(responseBody);
+
                 // Extract token from JSON response
-                String token = response.jsonPath().getString("token");
+                JSONObject jsonObject = new JSONObject(jsonContent);
+                String token = jsonObject.optString("token", null);
                 if (token != null && !token.isEmpty()) {
                     logger.info("Successfully retrieved security code token: {}", token);
                     return token;
                 } else {
-                    String errorMsg = String.format("Token not found or empty in response: %s", responseBody);
+                    String errorMsg = String.format("Token not found or empty in response: %s", jsonContent);
                     logger.error(errorMsg);
                     throw new RuntimeException(errorMsg);
                 }
@@ -259,6 +260,40 @@ public class BDDUtils {
             logger.error(errorMsg, e);
             throw new RuntimeException(errorMsg, e);
         }
+    }
+
+    /**
+     * Extract JSON content from HTML-wrapped response
+     * Handles both pure JSON and HTML-wrapped JSON responses
+     * @param responseBody Response body from API
+     * @return Extracted JSON content
+     */
+    private static String extractJsonFromHtml(String responseBody) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            throw new RuntimeException("Response body is null or empty");
+        }
+
+        String trimmed = responseBody.trim();
+
+        // Check if response is pure JSON (starts with { or [)
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            logger.debug("Response is pure JSON, no HTML wrapping detected");
+            return trimmed;
+        }
+
+        // Try to extract JSON from HTML <body> tag
+        int bodyStart = trimmed.indexOf("<body>");
+        int bodyEnd = trimmed.indexOf("</body>");
+
+        if (bodyStart != -1 && bodyEnd != -1) {
+            String jsonContent = trimmed.substring(bodyStart + 6, bodyEnd).trim();
+            logger.debug("Extracted JSON from HTML <body> tag: {}", jsonContent);
+            return jsonContent;
+        }
+
+        // If no <body> tag found, return original response
+        logger.warn("No HTML <body> tag found, returning original response");
+        return trimmed;
     }
 
 }

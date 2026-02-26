@@ -23,29 +23,20 @@ public class FrameworkConfig {
      * Get default connection timeout in milliseconds
      * @return connection timeout (default: 15000ms)
      */
-    public static int getConnectionTimeoutDefault() {
-        return config.hasPath("http.connection.timeout.default")
-            ? config.getInt("http.connection.timeout.default")
-            : 15000;
-    }
-
-    /**
-     * Get connection timeout in milliseconds
-     * @return connection timeout (default: 30000ms)
-     */
     public static int getConnectionTimeout() {
         return config.hasPath("http.connection.timeout")
             ? config.getInt("http.connection.timeout")
             : 30000;
     }
 
+
     /**
      * Get default socket timeout in milliseconds
      * @return socket timeout (default: 15000ms)
      */
     public static int getSocketTimeoutDefault() {
-        return config.hasPath("http.socket.timeout.default")
-            ? config.getInt("http.socket.timeout.default")
+        return config.hasPath("http.socket.timeout.fallback")
+            ? config.getInt("http.socket.timeout.fallback")
             : 15000;
     }
 
@@ -54,8 +45,8 @@ public class FrameworkConfig {
      * @return socket timeout (default: 30000ms)
      */
     public static int getSocketTimeout() {
-        return config.hasPath("http.socket.timeout")
-            ? config.getInt("http.socket.timeout")
+        return config.hasPath("http.socket.timeout.value")
+            ? config.getInt("http.socket.timeout.value")
             : 30000;
     }
 
@@ -289,6 +280,20 @@ public class FrameworkConfig {
         return config.hasPath("webdriver.timeouts.wait.for.timeout")
             ? config.getInt("webdriver.timeouts.wait.for.timeout")
             : 15000;
+    }
+
+    // ========================================
+    // API Request/Response Logging
+    // ========================================
+
+    /**
+     * Check if API request/response logging is enabled
+     * @return true if logging is enabled (default: true)
+     */
+    public static boolean isApiRequestResponseLogsEnabled() {
+        return config.hasPath("api.request.response.logging.enabled")
+            ? config.getBoolean("api.request.response.logging.enabled")
+            : true;
     }
 
     // ========================================

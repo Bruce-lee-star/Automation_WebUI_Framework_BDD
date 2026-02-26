@@ -40,6 +40,8 @@ public class Entity {
     public Entity() {
         // Initialize baseUri from configuration
         this.baseUri = FrameworkConfig.getDefaultBaseUri();
+        // Initialize API request/response logging from configuration
+        this.initializeApiRequestResponseLogging();
     }
 
     /**
@@ -119,12 +121,7 @@ public class Entity {
     }
 
     private void initializeApiRequestResponseLogging() {
-        boolean valueTobeSet = true;
-        String apiRequestResponseLoggingValue = System.getProperty(Constants.API_REQUEST_RESPONSE_LOGGING);
-        if (StringUtils.isNotBlank(apiRequestResponseLoggingValue)) {
-            valueTobeSet = Boolean.parseBoolean(apiRequestResponseLoggingValue);
-        }
-        this.setApiRequestResponseLogsEnabled(valueTobeSet);
+        this.setApiRequestResponseLogsEnabled(FrameworkConfig.isApiRequestResponseLogsEnabled());
     }
 
     // ============ 原有getter/setter保持不变 ============

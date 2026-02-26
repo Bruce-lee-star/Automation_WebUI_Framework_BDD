@@ -1,6 +1,6 @@
-@test
-Feature: testing logon - 1
 
+Feature: testing logon - 1
+  @test
   Scenario: testing logon to dbb-1
     Given logon DBB "O63_SIT1" environment as user "WP7UAT2_2"
 

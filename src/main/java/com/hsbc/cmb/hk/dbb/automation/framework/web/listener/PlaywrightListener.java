@@ -341,18 +341,38 @@ public class PlaywrightListener implements StepListener {
     }
 
     private void takeFailureScreenshot(ExecutedStepDescription step) {
-        String stepName = step != null ? step.getTitle() : "unknown_step";
-        takeScreenshotAndRegister("FAILURE_" + sanitizeName(stepName));
+        String stepName = (step != null && step.getTitle() != null) ? step.getTitle() : "unknown_step";
+        String sanitizedStepName = sanitizeFilename(stepName);
+        String screenshotName = "FAILURE_" + (sanitizedStepName != null ? sanitizedStepName : "step");
+        takeScreenshotAndRegister(screenshotName);
+    }
+
+    /**
+     * Sanitize filename by replacing invalid characters
+     */
+    private String sanitizeFilename(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            return "unnamed";
+        }
+        return name.replaceAll("[^a-zA-Z0-9_-]", "_");
     }
 
     private void recordTestData(String key, Object value) {
         String testName = currentTestName.get();
-        if (testName != null) {
-            testData.put(testName + "." + key, value);
+        if (testName != null && key != null) {
+            String dataKey = testName + "." + key;
+            testData.put(dataKey, value);
 
             // 所有测试数据都通过 LoggingConfigUtil 控制输出
             LoggingConfigUtil.logDebugIfVerbose(
                     logger, "Test data recorded: {} = {}", key, value);
+        } else {
+            if (testName == null) {
+                logger.warn("Cannot record test data: testName is null");
+            }
+            if (key == null) {
+                logger.warn("Cannot record test data: key is null");
+            }
         }
     }
 
