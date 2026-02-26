@@ -1,6 +1,7 @@
 package com.hsbc.cmb.hk.dbb.automation.tests.steps;
 
 import com.hsbc.cmb.hk.dbb.automation.framework.web.config.BrowserOverrideManager;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring.RealApiMonitor;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.session.SessionManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.factory.PageObjectFactory;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.HomePage;
@@ -39,38 +40,60 @@ public class LoginSteps {
         BDDUtils.setCurrentLoginInfo(logonDBBInfo);
         currentUrl = BDDUtils.getCurrentUrl();
 
-        // Check if user is already logged in (based on env+username, browser auto-detected)
-        if (SessionManager.isUserLoggedIn(env, username)) {
-            String browserType = BrowserOverrideManager.getEffectiveBrowserType();
-            String sessionKey = env + "_" + username + "_" + browserType;
-            System.out.println("User already logged in: " + sessionKey + ", restoring session...");
-            // Restore session and navigate to home page directly
-            boolean restored = SessionManager.restoreSession(env, username);
-            if (restored) {
-                System.out.println("Session restored successfully for: " + sessionKey);
-                // Get saved home URL from session
-                SessionManager.UserSession userSession = SessionManager.loadSession(env, username);
-                String homeUrl = userSession != null ? userSession.getHomeUrl() : null;
-                if (homeUrl != null && !homeUrl.isEmpty()) {
-                    System.out.println("Navigating to saved home URL: " + homeUrl);
-                    loginPage.navigateTo(homeUrl);
-//                    homePage.waitForElementVisibleWithinTime(homePage.quickLink, 20);
-                    homePage.quickLink.waitForVisible(20);
-                    System.out.println("Skip login successful - user already logged in and navigated to home page");
-                } else {
-                    // Fallback: navigate to login page and refresh
-                    loginPage.navigateTo(currentUrl);
-                    loginPage.refresh();
-                    System.out.println("Skip login successful - user already logged in (no home URL saved)");
-                }
-                return;
-            } else {
-                System.out.println("Failed to restore session for: " + sessionKey + ", will login again");
-            }
+        // 【简化】尝试恢复Session并跳过登录（如果可用）
+        boolean skippedLogin = tryRestoreSessionAndNavigate(env, username);
+        if (skippedLogin) {
+            return; // Session已恢复，跳过登录
         }
 
         // Perform full login flow
         performLogin(env);
+    }
+
+    /**
+     * 【简化】尝试恢复Session并导航到首页
+     *
+     * @param env Environment identifier
+     * @param username Username
+     * @return true表示成功恢复session并跳过登录，false表示需要执行登录
+     */
+    private boolean tryRestoreSessionAndNavigate(String env, String username) {
+        // 检查并尝试恢复session
+        if (!SessionManager.restoreSession(env, username)) {
+            return false; // Session不可用，需要登录
+        }
+
+        String browserType = BrowserOverrideManager.getEffectiveBrowserType();
+        String sessionKey = env + "_" + username + "_" + browserType;
+        System.out.println("Session restored successfully for: " + sessionKey);
+
+        // 获取保存的home URL并导航
+        SessionManager.UserSession userSession = SessionManager.loadSession(env, username);
+        String homeUrl = userSession != null ? userSession.getHomeUrl() : null;
+
+        if (homeUrl != null && !homeUrl.isEmpty()) {
+            System.out.println("Navigating to saved home URL: " + homeUrl);
+            loginPage.navigateTo(homeUrl);
+            homePage.quickLink.waitForVisible(20);
+            System.out.println("Skip login successful - user already logged in and navigated to home page");
+
+            // 【重要】跳过登录后，保存更新后的homeUrl和更新session时间戳
+            String currentHomeUrl = loginPage.getCurrentUrl();
+            SessionManager.saveSessionAfterLogin(env, username, currentHomeUrl);
+            System.out.println("Session updated after skip login with new home URL: " + currentHomeUrl);
+        } else {
+            // Fallback: navigate to login page and refresh
+            loginPage.navigateTo(currentUrl);
+            loginPage.refresh();
+            System.out.println("Skip login successful - user already logged in (no home URL saved)");
+
+            // 【重要】跳过登录后，更新session
+            String currentHomeUrl = loginPage.getCurrentUrl();
+            SessionManager.saveSessionAfterLogin(env, username, currentHomeUrl);
+            System.out.println("Session updated after skip login with current URL: " + currentHomeUrl);
+        }
+
+        return true; // Session已恢复并更新
     }
 
     /**
@@ -82,6 +105,11 @@ public class LoginSteps {
         String browserType = BrowserOverrideManager.getEffectiveBrowserType();
         String sessionKey = env + "_" + username + "_" + browserType;
         System.out.println("Performing login for: " + sessionKey);
+
+        // 【简化方式】一行代码监控并验证API
+        // 自动清空历史、启用验证、设置期望、开始监控、API响应时自动验证
+        // 支持普通URL（自动转换为正则）
+        RealApiMonitor.monitorAndVerify(loginPage.getPage().context(), "auth/login", 200);
         loginPage.navigateTo(currentUrl);
         loginPage.USERNAME_INPUT.type(username);
         loginPage.NEXT_BUTTON.click();
@@ -91,12 +119,15 @@ public class LoginSteps {
         loginPage.LOGIN_BUTTON.click();
         loginPage.LOGIN_BUTTON.waitForNotVisible(30);
         homePage.quickLink.waitForVisible(30);
+
+        // 打印所有捕获到的API（用于调试，确认实际调用了哪些API）
+        RealApiMonitor.printAllCapturedApis();
+
+        // 注意：API响应时会自动验证，不符合预期会立即抛出异常并报告给Serenity
+
         // Get home page URL after successful login
         String homeUrl = loginPage.getCurrentUrl();
-        // Mark user as logged in and save session with home URL
-        SessionManager.markUserLoggedIn(env, username);
-        SessionManager.saveSession(env, username, homeUrl);
-        System.out.println("Login completed and session saved for: " + sessionKey);
-        System.out.println("Login successful - home URL: " + homeUrl);
+        // 【简化】一行代码：标记用户已登录并保存session
+        SessionManager.saveSessionAfterLogin(env, username, homeUrl);
     }
 }

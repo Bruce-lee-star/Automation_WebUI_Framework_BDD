@@ -1,5 +1,6 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring;
 
+import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
 import com.microsoft.playwright.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,20 +16,44 @@ import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 
 /**
- * Real API Monitor - 监控真实API响应状态码
- *
+ * Real API Monitor - 实时监控API响应
  * 功能：
- * 1. 监控真实API请求和响应
- * 2. 记录API调用历史（包括真实的响应状态码）
- * 3. 验证API响应状态码是否符合预期
+ * 1. 实时监控API请求和响应
+ * 2. 记录API调用历史（包括真实的响应状态码、响应时间等）
+ * 3. 实时验证API响应是否符合预期（状态码、响应时间、响应内容等）
  * 4. 支持按URL、方法等条件过滤API调用记录
  * 5. 不修改API请求和响应，只进行监控
  *
- * 使用方式（从简单到复杂）：
- * - 超简单（单个）：monitorOnlyApiAndVerify(page, ".*api/.*", 200) - 一行代码搞定
- * - 超简单（多个）：monitorMultipleApisAndVerify(page, map) - 批量设置
- * - 只监控：monitorOnlyApi(page, ".*api/.*") + assertStatusCode() - 灵活手动验证
+ * 使用方式（推荐使用Builder模式）：
  *
+ * 【推荐】Builder模式 - 简单验证（仅状态码）：
+ *   RealApiMonitor.with(context)
+ *       .monitorApi(".*auth/login.*", 200)
+ *       .monitorApi(".*api/users.*", 200)
+ *       .build();
+ *
+ * 【高级】Builder模式 - 多维度验证：
+ *   RealApiMonitor.with(context)
+ *       .expectApi(ApiExpectation.forUrl(".*auth/login.*")
+ *           .statusCode(200)
+ *           .responseTimeLessThan(1000)
+ *           .responseBodyContains("success"))
+ *       .expectApi(ApiExpectation.forUrl(".*api/users.*")
+ *           .statusCode(200)
+ *           .responseTimeLessThan(500))
+ *       .build();
+ *
+ * 【简化】单API监控验证（仅状态码）：
+ *   monitorAndVerify(context, ".*auth/login.*", 200);
+ *
+ * 【高级】单API多维度验证：
+ *   monitorWithExpectation(context, ApiExpectation.forUrl(".*auth/login.*")
+ *       .statusCode(200)
+ *       .responseTimeLessThan(1000)
+ *       .responseBodyContains("token"));
+ *
+ * 【灵活】只监控不验证：
+ *   startMonitoring(context, ".*api/.*");
  */
 public class RealApiMonitor {
 
@@ -37,14 +62,11 @@ public class RealApiMonitor {
     // 存储所有API调用记录
     private static final List<ApiCallRecord> apiCallHistory = new CopyOnWriteArrayList<>();
 
-    // 存储已注册的监听器
-    private static final Map<Page, Set<ResponseListener>> pageListeners = new HashMap<>();
-
     // 存储已注册的监听器（针对BrowserContext）
     private static final Map<BrowserContext, Set<ResponseListener>> contextListeners = new HashMap<>();
 
-    // 存储API期望（URL模式 -> 期望状态码）
-    private static final Map<String, Integer> apiExpectations = new HashMap<>();
+    // 存储API期望（URL模式 -> API期望对象）
+    private static final Map<String, ApiExpectation> apiExpectations = new HashMap<>();
 
     // 是否启用实时验证
     private static volatile boolean realTimeValidationEnabled = false;
@@ -52,70 +74,164 @@ public class RealApiMonitor {
     // ==================== 简化API（最常用） ====================
 
     /**
-     * 【最简单】监控单个API并自动验证 - 一行代码搞定！
-     * 自动清空历史、启用验证、设置期望、开始监控、API响应时自动验证
+     * 【推荐】使用Builder模式配置API监控
      *
-     * @param page Playwright Page对象
+     * @param context Playwright BrowserContext对象
+     * @return ApiMonitorBuilder对象，用于链式调用
+     *
+     * 示例：
+     * RealApiMonitor.with(context)
+     *     .monitorApi(".*auth/login.*", 200)
+     *     .monitorApi(".*api/users.*", 200)
+     *     .build();
+     */
+    public static ApiMonitorBuilder with(BrowserContext context) {
+        return new ApiMonitorBuilder(context);
+    }
+
+    /**
+     * 【简化】监控单个API并实时验证 - 一行代码搞定！
+     * 自动清空历史、启用验证、设置期望、开始监控
+     *
+     * @param context Playwright BrowserContext对象
      * @param urlPattern URL匹配模式（支持普通URL如 "/api/xxx" 或正则如 ".*api/users.*"）
      * @param expectedStatusCode 期望的状态码（如 200）
      *
      * 示例：
-     * RealApiMonitor.monitorOnlyApiAndVerify(page, ".*auth/login.*", 200);
-     * RealApiMonitor.monitorOnlyApiAndVerify(page, "/api/users", 200); // 自动转换为正则
+     * monitorAndVerify(context, ".*auth/login.*", 200);
+     * monitorAndVerify(context, "/api/users", 200); // 自动转换为正则
      */
-    public static void monitorOnlyApiAndVerify(Page page, String urlPattern, int expectedStatusCode) {
+    public static void monitorAndVerify(BrowserContext context, String urlPattern, int expectedStatusCode) {
         String pattern = toRegexPattern(urlPattern);
+        logger.info("========== Starting API monitoring with real-time verification ==========");
+        logger.info("Monitoring API: {} (Expected Status: {})", pattern, expectedStatusCode);
+        logger.info("Original URL pattern: '{}' -> Converted to: '{}'", urlPattern, pattern);
         clearHistory();
         clearApiExpectations();
         enableRealTimeValidation();
         expectApiStatus(pattern, expectedStatusCode);
-        monitorApi(page, pattern);
+        monitorApi(context, pattern);
     }
 
     /**
-     * 【最简单】监控多个API并自动验证 - 批量设置
+     * 【简化】监控多个API并实时验证 - 批量设置
      *
-     * @param page Playwright Page对象
+     * @param context Playwright BrowserContext对象
      * @param expectations API期望映射（URL模式 -> 期望状态码，支持普通URL或正则）
      *
      * 示例：
-     * Map<String, Integer> map = new HashMap<>();
-     * map.put(".*api/users.*", 200);
-     * map.put(".*api/products.*", 200);
-     * RealApiMonitor.monitorMultipleApisAndVerify(page, map);
+     * monitorMultiple(context, Map.of(
+     *     ".*api/users.*", 200,
+     *     ".*api/products.*", 200
+     * ));
      * // 或使用普通URL
-     * map.put("/api/users", 200);
-     * map.put("/api/products", 200);
+     * monitorMultiple(context, Map.of(
+     *     "/api/users", 200,
+     *     "/api/products", 200
+     * ));
      */
-    public static void monitorMultipleApisAndVerify(Page page, Map<String, Integer> expectations) {
+    public static void monitorMultiple(BrowserContext context, Map<String, Integer> expectations) {
+        logger.info("========== Starting multiple APIs monitoring with real-time verification ==========");
+        logger.info("Monitoring {} APIs with verification", expectations.size());
         // 转换普通URL为正则表达式
         Map<String, Integer> convertedExpectations = new HashMap<>();
         for (Map.Entry<String, Integer> entry : expectations.entrySet()) {
-            convertedExpectations.put(toRegexPattern(entry.getKey()), entry.getValue());
+            String pattern = toRegexPattern(entry.getKey());
+            convertedExpectations.put(pattern, entry.getValue());
+            logger.info("  - API: {} (Expected Status: {})", pattern, entry.getValue());
         }
         clearHistory();
         clearApiExpectations();
         enableRealTimeValidation();
         expectMultipleApiStatus(convertedExpectations);
-        monitorAllApi(page);
+        monitorAllApi(context);
     }
 
     /**
-     * 【最简单】只监控API，不自动验证 - 灵活手动验证
+     * 【灵活】只监控API，不自动验证 - 灵活手动验证
      *
-     * @param page Playwright Page对象
+     * @param context Playwright BrowserContext对象
      * @param urlPattern URL匹配模式（支持普通URL或正则）
      *
      * 示例：
-     * RealApiMonitor.monitorOnlyApi(page, ".*api/.*");
-     * RealApiMonitor.monitorOnlyApi(page, "/api/users"); // 自动转换为正则
+     * startMonitoring(context, ".*api/.*");
      * // ... 执行操作
-     * RealApiMonitor.assertStatusCode(".*api/.*", 200); // 手动验证
+     * verifyStatus(".*api/users.*", 200); // 手动验证
      */
-    public static void monitorOnlyApi(Page page, String urlPattern) {
+    public static void startMonitoring(BrowserContext context, String urlPattern) {
         String pattern = toRegexPattern(urlPattern);
+        logger.info("========== Starting API monitoring (without automatic verification) ==========");
+        logger.info("Monitoring API: {} (Original: '{}')", pattern, urlPattern);
         clearHistory();
-        monitorApi(page, pattern);
+        monitorApi(context, pattern);
+    }
+
+    /**
+     * 【灵活】监控所有API响应
+     *
+     * @param context Playwright BrowserContext对象
+     *
+     * 示例：
+     * startMonitoringAll(context);
+     * // ... 执行操作
+     * printAllCapturedApis(); // 查看所有捕获的API
+     */
+    public static void startMonitoringAll(BrowserContext context) {
+        logger.info("========== Starting full API monitoring (all APIs) ==========");
+        clearHistory();
+        monitorAllApi(context);
+    }
+
+    /**
+     * 【高级】监控单个API并进行多维度实时验证
+     * 支持验证状态码、响应时间、响应内容等
+     *
+     * @param context Playwright BrowserContext对象
+     * @param expectation API期望对象
+     *
+     * 示例：
+     * monitorWithExpectation(context, ApiExpectation.forUrl(".*auth/login.*")
+     *     .statusCode(200)
+     *     .responseTimeLessThan(1000)
+     *     .responseBodyContains("token"));
+     */
+    public static void monitorWithExpectation(BrowserContext context, ApiExpectation expectation) {
+        logger.info("========== Starting API monitoring with multi-dimension verification ==========");
+        logger.info("Monitoring API: {} with expectation: {}", expectation.getUrlPattern(), expectation.getDescription());
+        clearHistory();
+        clearApiExpectations();
+        enableRealTimeValidation();
+        RealApiMonitor.apiExpectations.put(expectation.getUrlPattern(), expectation);
+        monitorApi(context, expectation.getUrlPattern());
+    }
+
+    /**
+     * 【高级】监控多个API并进行多维度实时验证
+     *
+     * @param context Playwright BrowserContext对象
+     * @param expectations API期望对象列表
+     *
+     * 示例：
+     * monitorWithExpectations(context, List.of(
+     *     ApiExpectation.forUrl(".*auth/login.*").statusCode(200).responseTimeLessThan(1000),
+     *     ApiExpectation.forUrl(".*api/users.*").statusCode(200).responseBodyContains("data")
+     * ));
+     */
+    public static void monitorWithExpectations(BrowserContext context, List<ApiExpectation> expectations) {
+        logger.info("========== Starting multiple APIs monitoring with multi-dimension verification ==========");
+        logger.info("Monitoring {} APIs with verification", expectations.size());
+        clearHistory();
+        clearApiExpectations();
+        enableRealTimeValidation();
+        for (ApiExpectation expectation : expectations) {
+            logger.info("  - {} : {}", expectation.getUrlPattern(), expectation.getDescription());
+            RealApiMonitor.apiExpectations.put(expectation.getUrlPattern(), expectation);
+        }
+        if (expectations.size() == 1) {
+            monitorApi(context, expectations.get(0).getUrlPattern());
+        } else {
+            monitorAllApi(context);
+        }
     }
 
     /**
@@ -213,92 +329,8 @@ public class RealApiMonitor {
     }
     
     /**
-     * 监控特定URL的真实API响应
-     * 
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     */
-    public static void monitorApi(Page page, String urlPattern) {
-        monitorApi(page, urlPattern, null);
-    }
-    
-    /**
-     * 监控特定URL的真实API响应，并提供自定义监听器
-     * 
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param listener 响应监听器（可为null）
-     */
-    public static void monitorApi(Page page, String urlPattern, ResponseListener listener) {
-        Pattern pattern = Pattern.compile(urlPattern);
-        
-        // 监听响应事件
-        ResponseListener responseListener = (response, request, responseTimeMs) -> {
-            if (pattern.matcher(response.url()).matches()) {
-                try {
-                    String requestId = UUID.randomUUID().toString();
-                    Map<String, String> requestHeaders = new HashMap<>(request.headers());
-                    Object requestBody = request.postData();
-                    
-                    Map<String, String> responseHeaders = new HashMap<>(response.headers());
-                    Object responseBody = null;
-                    
-                    // 尝试获取响应体
-                    try {
-                        responseBody = response.text();
-                    } catch (Exception e) {
-                        logger.debug("Failed to get response body for: {}", response.url());
-                    }
-                    
-                    ApiCallRecord record = new ApiCallRecord(
-                            requestId, response.url(), request.method(), System.currentTimeMillis(),
-                            requestHeaders, requestBody, response.status(), responseHeaders,
-                            responseBody, responseTimeMs
-                    );
-                    
-                    apiCallHistory.add(record);
-                    logger.info("Recorded API call: {} {} - Status: {}", 
-                            request.method(), response.url(), response.status());
-                    
-                    // 实时验证：如果启用了实时验证，立即检查API响应
-                    if (realTimeValidationEnabled) {
-                        validateRealTimeApi(record);
-                    }
-                    
-                } catch (Exception e) {
-                    logger.error("Failed to record API call", e);
-                }
-            }
-        };
-        
-        // 添加响应监听器
-        if (listener != null) {
-            pageListeners.computeIfAbsent(page, k -> new HashSet<>()).add(responseListener);
-        }
-        
-        page.onResponse(response -> {
-            // 计算响应时间（由于Playwright API限制，使用估算值）
-            long responseTimeMs = 0;
-            
-            // 调用内部监听器
-            if (pageListeners.containsKey(page)) {
-                for (ResponseListener rl : pageListeners.get(page)) {
-                    rl.onResponse(response, response.request(), responseTimeMs);
-                }
-            }
-            
-            // 如果有自定义监听器，也调用它
-            if (listener != null) {
-                listener.onResponse(response, response.request(), responseTimeMs);
-            }
-        });
-        
-        logger.info("Started monitoring API for URL pattern: {}", urlPattern);
-    }
-    
-    /**
      * 监控特定URL的真实API响应（针对BrowserContext）
-     * 
+     *
      * @param context Playwright BrowserContext对象
      * @param urlPattern URL匹配模式（支持正则表达式）
      */
@@ -315,83 +347,96 @@ public class RealApiMonitor {
      */
     public static void monitorApi(BrowserContext context, String urlPattern, ResponseListener listener) {
         Pattern pattern = Pattern.compile(urlPattern);
-        
+        logger.info("🎯 Setting up API monitor for pattern: {} on BrowserContext", urlPattern);
+
+        // 用于统计响应数量
+        final int[] responseCount = {0};
+
+        // 保存监听器引用（先初始化set）
+        Set<ResponseListener> listeners = contextListeners.computeIfAbsent(context, k -> new HashSet<>());
+
         // 添加响应监听器
         ResponseListener responseListener = (response, request, responseTimeMs) -> {
-            if (pattern.matcher(response.url()).matches()) {
+            responseCount[0]++;
+            boolean matches = pattern.matcher(response.url()).matches();
+            LoggingConfigUtil.logDebugIfVerbose(logger, "🔍 Checking URL: {} matches pattern: {} = {} (Total responses: {})",
+                    response.url(), urlPattern, matches, responseCount[0]);
+
+            if (matches) {
                 try {
                     String requestId = UUID.randomUUID().toString();
                     Map<String, String> requestHeaders = new HashMap<>(request.headers());
                     Object requestBody = request.postData();
-                    
+
                     Map<String, String> responseHeaders = new HashMap<>(response.headers());
                     Object responseBody = null;
-                    
+
                     // 尝试获取响应体
                     try {
                         responseBody = response.text();
                     } catch (Exception e) {
                         logger.debug("Failed to get response body for: {}", response.url());
                     }
-                    
+
                     ApiCallRecord record = new ApiCallRecord(
                             requestId, response.url(), request.method(), System.currentTimeMillis(),
                             requestHeaders, requestBody, response.status(), responseHeaders,
                             responseBody, responseTimeMs
                     );
-                    
+
                     apiCallHistory.add(record);
-                    logger.info("Recorded API call: {} {} - Status: {}", 
+                    logger.info("✅ Recorded API call: {} {} - Status: {}",
                             request.method(), response.url(), response.status());
-                    
+
                     // 实时验证：如果启用了实时验证，立即检查API响应
                     if (realTimeValidationEnabled) {
                         validateRealTimeApi(record);
                     }
-                    
+
                 } catch (Exception e) {
                     logger.error("Failed to record API call", e);
                 }
             }
         };
-        
-        // 保存监听器引用
+
+        // 添加监听器到set
+        listeners.add(responseListener);
         if (listener != null) {
-            contextListeners.computeIfAbsent(context, k -> new HashSet<>()).add(listener);
+            listeners.add(listener);
         }
-        
+
+        logger.info("📡 Registering onResponse listener on BrowserContext, listeners for this context: {}", listeners.size());
+
+        // 使用局部变量避免闭包问题
+        final Set<ResponseListener> currentListeners = listeners;
+
         context.onResponse(response -> {
-            // 计算响应时间（由于Playwright API限制，使用估算值）
+            LoggingConfigUtil.logDebugIfVerbose(logger, "📡 onResponse event fired! URL: {}, Status: {}", response.url(), response.status());
+            // 使用Playwright API获取真实的响应时间
             long responseTimeMs = 0;
-            
+            try {
+                responseTimeMs = (long) response.request().timing().responseEnd;
+                LoggingConfigUtil.logDebugIfVerbose(logger, "📊 Response timing for {}: {}ms", response.url(), responseTimeMs);
+            } catch (Exception e) {
+                logger.debug("Failed to get response timing for: {}", response.url());
+            }
+
             // 调用内部监听器
-            if (contextListeners.containsKey(context)) {
-                for (ResponseListener rl : contextListeners.get(context)) {
+            for (ResponseListener rl : currentListeners) {
+                try {
                     rl.onResponse(response, response.request(), responseTimeMs);
+                } catch (Exception e) {
+                    logger.error("Error executing response listener", e);
                 }
             }
-            
-            // 如果有自定义监听器，也调用它
-            if (listener != null) {
-                listener.onResponse(response, response.request(), responseTimeMs);
-            }
         });
-        
-        logger.info("Started monitoring API for URL pattern: {} on context", urlPattern);
+
+        logger.info("✅ API monitoring started successfully for pattern: {} on BrowserContext", urlPattern);
     }
     
     /**
      * 监控所有API响应
-     * 
-     * @param page Playwright Page对象
-     */
-    public static void monitorAllApi(Page page) {
-        monitorApi(page, ".*");
-    }
-    
-    /**
-     * 监控所有API响应（针对BrowserContext）
-     * 
+     *
      * @param context Playwright BrowserContext对象
      */
     public static void monitorAllApi(BrowserContext context) {
@@ -458,7 +503,7 @@ public class RealApiMonitor {
     
     /**
      * 获取特定URL的最后一次API调用记录
-     * 
+     *
      * @param urlPattern URL匹配模式（支持正则表达式）
      * @return 最后一次匹配的API调用记录，如果没有则返回null
      */
@@ -469,120 +514,8 @@ public class RealApiMonitor {
         }
         return calls.get(calls.size() - 1);
     }
-    
-    /**
-     * 验证API响应状态码是否符合预期
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param expectedStatusCode 期望的状态码
-     * @return 如果状态码符合预期返回true，否则返回false
-     */
-    public static boolean verifyStatusCode(String urlPattern, int expectedStatusCode) {
-        ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-        if (record == null) {
-            logger.warn("No API call found for URL pattern: {}", urlPattern);
-            return false;
-        }
-        
-        int actualStatusCode = record.getStatusCode();
-        boolean result = actualStatusCode == expectedStatusCode;
-        
-        if (result) {
-            logger.info("Status code verification passed. URL: {}, Status: {}", 
-                    record.getUrl(), actualStatusCode);
-        } else {
-            logger.warn("Status code verification failed. URL: {}, Expected: {}, Actual: {}", 
-                    record.getUrl(), expectedStatusCode, actualStatusCode);
-        }
-        
-        return result;
-    }
-    
-    /**
-     * 验证API响应状态码是否在预期范围内
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param minStatusCode 最小期望状态码（包含）
-     * @param maxStatusCode 最大期望状态码（包含）
-     * @return 如果状态码在预期范围内返回true，否则返回false
-     */
-    public static boolean verifyStatusCodeInRange(String urlPattern, int minStatusCode, int maxStatusCode) {
-        ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-        if (record == null) {
-            logger.warn("No API call found for URL pattern: {}", urlPattern);
-            return false;
-        }
-        
-        int actualStatusCode = record.getStatusCode();
-        boolean result = actualStatusCode >= minStatusCode && actualStatusCode <= maxStatusCode;
-        
-        if (result) {
-            logger.info("Status code verification passed. URL: {}, Status: {}, Range: [{}-{}]", 
-                    record.getUrl(), actualStatusCode, minStatusCode, maxStatusCode);
-        } else {
-            logger.warn("Status code verification failed. URL: {}, Expected range: [{}-{}], Actual: {}", 
-                    record.getUrl(), minStatusCode, maxStatusCode, actualStatusCode);
-        }
-        
-        return result;
-    }
-    
-    /**
-     * 检查API是否被调用
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @return 如果API被调用至少一次返回true，否则返回false
-     */
-    public static boolean isApiCalled(String urlPattern) {
-        List<ApiCallRecord> calls = getApiHistoryByUrl(urlPattern);
-        return !calls.isEmpty();
-    }
-    
-    /**
-     * 统计API调用次数
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @return API调用次数
-     */
-    public static int countApiCalls(String urlPattern) {
-        return getApiHistoryByUrl(urlPattern).size();
-    }
-    
-    /**
-     * 获取API响应时间统计信息
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @return 包含平均、最小、最大响应时间的Map
-     */
-    public static Map<String, Long> getResponseTimeStats(String urlPattern) {
-        List<ApiCallRecord> calls = getApiHistoryByUrl(urlPattern);
-        Map<String, Long> stats = new HashMap<>();
-        
-        if (calls.isEmpty()) {
-            stats.put("average", 0L);
-            stats.put("min", 0L);
-            stats.put("max", 0L);
-            return stats;
-        }
-        
-        long sum = 0;
-        long min = Long.MAX_VALUE;
-        long max = Long.MIN_VALUE;
-        
-        for (ApiCallRecord record : calls) {
-            long responseTime = record.getResponseTimeMs();
-            sum += responseTime;
-            min = Math.min(min, responseTime);
-            max = Math.max(max, responseTime);
-        }
-        
-        stats.put("average", sum / calls.size());
-        stats.put("min", min);
-        stats.put("max", max);
-        
-        return stats;
-    }
-    
+
+
     /**
      * 清除所有API调用记录
      */
@@ -590,27 +523,37 @@ public class RealApiMonitor {
         apiCallHistory.clear();
         logger.info("API call history cleared");
     }
-    
+
     /**
-     * 移除指定Page的所有监听器
-     * 
-     * @param page Playwright Page对象
-     */
-    public static void removeListeners(Page page) {
-        pageListeners.remove(page);
-        logger.info("Removed all listeners for page");
-    }
-    
-    /**
-     * 移除指定BrowserContext的所有监听器
-     * 
+     * 停止监控并清理监听器
+     *
      * @param context Playwright BrowserContext对象
      */
-    public static void removeListeners(BrowserContext context) {
+    public static void stopMonitoring(BrowserContext context) {
         contextListeners.remove(context);
-        logger.info("Removed all listeners for context");
+        logger.info("Stopped monitoring and removed listeners for context");
     }
     
+    /**
+     * 打印所有捕获到的API（用于调试）
+     */
+    public static void printAllCapturedApis() {
+        logger.info("========== All Captured APIs ==========");
+        logger.info("Total APIs captured: {}", apiCallHistory.size());
+        
+        if (apiCallHistory.isEmpty()) {
+            logger.info("No API calls captured.");
+            return;
+        }
+        
+        for (int i = 0; i < apiCallHistory.size(); i++) {
+            ApiCallRecord record = apiCallHistory.get(i);
+            logger.info("#{} [{}] {} - Status: {}", 
+                    i + 1, record.getMethod(), record.getUrl(), record.getStatusCode());
+        }
+        logger.info("========================================");
+    }
+
     /**
      * 打印API调用历史摘要
      */
@@ -637,379 +580,10 @@ public class RealApiMonitor {
                 logger.info("  {} - {} calls", url, count));
         
         logger.info("Calls by status code:");
-        statusCount.forEach((status, count) -> 
+        statusCount.forEach((status, count) ->
                 logger.info("  {} - {} calls", status, count));
     }
-    
-    // ==================== Serenity Report Integration ====================
-    // 以下方法与Serenity报告集成，验证失败时会抛出AssertionError并显示在报告中
-    
-    /**
-     * 验证API响应状态码（Serenity报告集成版）
-     * 如果验证失败，会抛出AssertionError并记录到Serenity报告中
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param expectedStatusCode 期望的状态码
-     */
-    public static void assertStatusCode(String urlPattern, int expectedStatusCode) {
-        ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-        
-        if (record == null) {
-            String errorMsg = String.format(
-                "No API call found for URL pattern: '%s'. Expected status code: %d", 
-                urlPattern, expectedStatusCode
-            );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        int actualStatusCode = record.getStatusCode();
-        
-        try {
-            assertThat(
-                String.format("API status code mismatch for URL: %s", record.getUrl()),
-                actualStatusCode, 
-                equalTo(expectedStatusCode)
-            );
-            logger.info("Status code verification passed. URL: {}, Status: {}", 
-                    record.getUrl(), actualStatusCode);
-        } catch (AssertionError e) {
-            logger.error("Status code verification failed. URL: {}, Expected: {}, Actual: {}", 
-                    record.getUrl(), expectedStatusCode, actualStatusCode);
-            
-            // 添加详细的错误信息到断言中
-            throw new AssertionError(String.format(
-                "API Status Code Mismatch%n" +
-                "URL: %s%n" +
-                "Method: %s%n" +
-                "Expected Status Code: %d%n" +
-                "Actual Status Code: %d%n" +
-                "Response Time: %dms%n" +
-                "Response Body: %s",
-                record.getUrl(),
-                record.getMethod(),
-                expectedStatusCode,
-                actualStatusCode,
-                record.getResponseTimeMs(),
-                truncateString(String.valueOf(record.getResponseBody()), 500)
-            ));
-        }
-    }
-    
-    /**
-     * 验证API响应状态码在预期范围内（Serenity报告集成版）
-     * 如果验证失败，会抛出AssertionError并记录到Serenity报告中
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param minStatusCode 最小期望状态码（包含）
-     * @param maxStatusCode 最大期望状态码（包含）
-     */
-    public static void assertStatusCodeInRange(String urlPattern, int minStatusCode, int maxStatusCode) {
-        ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-        
-        if (record == null) {
-            String errorMsg = String.format(
-                "No API call found for URL pattern: '%s'. Expected range: [%d-%d]", 
-                urlPattern, minStatusCode, maxStatusCode
-            );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        int actualStatusCode = record.getStatusCode();
-        
-        try {
-            assertThat(
-                String.format("API status code not in range for URL: %s", record.getUrl()),
-                actualStatusCode,
-                greaterThanOrEqualTo(minStatusCode)
-            );
-            assertThat(
-                String.format("API status code not in range for URL: %s", record.getUrl()),
-                actualStatusCode,
-                lessThanOrEqualTo(maxStatusCode)
-            );
-            logger.info("Status code verification passed. URL: {}, Status: {}, Range: [{}-{}]", 
-                    record.getUrl(), actualStatusCode, minStatusCode, maxStatusCode);
-        } catch (AssertionError e) {
-            logger.error("Status code verification failed. URL: {}, Expected range: [{}-{}], Actual: {}", 
-                    record.getUrl(), minStatusCode, maxStatusCode, actualStatusCode);
-            
-            // 添加详细的错误信息到断言中
-            throw new AssertionError(String.format(
-                "API Status Code Out of Range%n" +
-                "URL: %s%n" +
-                "Method: %s%n" +
-                "Expected Range: [%d-%d]%n" +
-                "Actual Status Code: %d%n" +
-                "Response Time: %dms%n" +
-                "Response Body: %s",
-                record.getUrl(),
-                record.getMethod(),
-                minStatusCode,
-                maxStatusCode,
-                actualStatusCode,
-                record.getResponseTimeMs(),
-                truncateString(String.valueOf(record.getResponseBody()), 500)
-            ));
-        }
-    }
-    
-    /**
-     * 断言API被调用（Serenity报告集成版）
-     * 如果API未被调用，会抛出AssertionError并记录到Serenity报告中
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     */
-    public static void assertApiCalled(String urlPattern) {
-        List<ApiCallRecord> calls = getApiHistoryByUrl(urlPattern);
-        
-        if (calls.isEmpty()) {
-            String errorMsg = String.format(
-                "Expected API to be called, but no API call found for URL pattern: '%s'", 
-                urlPattern
-            );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        logger.info("API call verification passed. Pattern: {}, Calls: {}", urlPattern, calls.size());
-    }
-    
-    /**
-     * 断言API被调用指定次数（Serenity报告集成版）
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param expectedCount 期望的调用次数
-     */
-    public static void assertApiCallCount(String urlPattern, int expectedCount) {
-        int actualCount = countApiCalls(urlPattern);
-        
-        if (actualCount != expectedCount) {
-            String errorMsg = String.format(
-                "API call count mismatch for pattern '%s'. Expected: %d, Actual: %d", 
-                urlPattern, expectedCount, actualCount
-            );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        logger.info("API call count verification passed. Pattern: {}, Count: {}", urlPattern, actualCount);
-    }
-    
-    /**
-     * 断言API响应成功（状态码为2xx）（Serenity报告集成版）
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     */
-    public static void assertApiSuccess(String urlPattern) {
-        ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-        
-        if (record == null) {
-            String errorMsg = String.format(
-                "No API call found for URL pattern: '%s'. Expected successful response (2xx)", 
-                urlPattern
-            );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        int actualStatusCode = record.getStatusCode();
-        
-        if (actualStatusCode < 200 || actualStatusCode >= 300) {
-            logger.error("API response not successful. URL: {}, Status: {}", 
-                    record.getUrl(), actualStatusCode);
-            
-            throw new AssertionError(String.format(
-                "API Response Not Successful (Expected 2xx)%n" +
-                "URL: %s%n" +
-                "Method: %s%n" +
-                "Actual Status Code: %d%n" +
-                "Response Time: %dms%n" +
-                "Response Body: %s",
-                record.getUrl(),
-                record.getMethod(),
-                actualStatusCode,
-                record.getResponseTimeMs(),
-                truncateString(String.valueOf(record.getResponseBody()), 500)
-            ));
-        }
-        
-        logger.info("API success verification passed. URL: {}, Status: {}", 
-                record.getUrl(), actualStatusCode);
-    }
-    
-    /**
-     * 断言API响应体包含指定内容（Serenity报告集成版）
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param expectedContent 期望包含的内容
-     */
-    public static void assertResponseBodyContains(String urlPattern, String expectedContent) {
-        ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-        
-        if (record == null) {
-            String errorMsg = String.format(
-                "No API call found for URL pattern: '%s'. Expected response to contain: %s", 
-                urlPattern, expectedContent
-            );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        String responseBody = String.valueOf(record.getResponseBody());
-        
-        if (responseBody == null || !responseBody.contains(expectedContent)) {
-            logger.error("Response body does not contain expected content. URL: {}, Expected: {}", 
-                    record.getUrl(), expectedContent);
-            
-            throw new AssertionError(String.format(
-                "Response Body Does Not Contain Expected Content%n" +
-                "URL: %s%n" +
-                "Method: %s%n" +
-                "Expected Content: %s%n" +
-                "Response Body: %s",
-                record.getUrl(),
-                record.getMethod(),
-                expectedContent,
-                truncateString(responseBody, 500)
-            ));
-        }
-        
-        logger.info("Response body content verification passed. URL: {}", record.getUrl());
-    }
-    
-    /**
-     * 断言API响应时间小于指定值（Serenity报告集成版）
-     * 注意：由于Playwright API限制，响应时间可能不可用（返回0）
-     * 
-     * @param urlPattern URL匹配模式（支持正则表达式）
-     * @param maxResponseTimeMs 最大响应时间（毫秒）
-     */
-    public static void assertResponseTime(String urlPattern, long maxResponseTimeMs) {
-        ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-        
-        if (record == null) {
-            String errorMsg = String.format(
-                "No API call found for URL pattern: '%s'. Expected response time <= %dms", 
-                urlPattern, maxResponseTimeMs
-            );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        long actualResponseTime = record.getResponseTimeMs();
-        
-        // 检查响应时间是否可用
-        if (actualResponseTime == 0) {
-            logger.warn("Response time verification skipped. Response time is not available due to Playwright API limitations. URL: {}", 
-                    record.getUrl());
-            return; // 跳过验证
-        }
-        
-        if (actualResponseTime > maxResponseTimeMs) {
-            logger.error("Response time exceeded threshold. URL: {}, Expected: <={}ms, Actual: {}ms", 
-                    record.getUrl(), maxResponseTimeMs, actualResponseTime);
-            
-            throw new AssertionError(String.format(
-                "API Response Time Exceeded Threshold%n" +
-                "URL: %s%n" +
-                "Method: %s%n" +
-                "Max Expected Response Time: %dms%n" +
-                "Actual Response Time: %dms%n" +
-                "Status Code: %d",
-                record.getUrl(),
-                record.getMethod(),
-                maxResponseTimeMs,
-                actualResponseTime,
-                record.getStatusCode()
-            ));
-        }
-        
-        logger.info("Response time verification passed. URL: {}, Time: {}ms", 
-                record.getUrl(), actualResponseTime);
-    }
-    
-    /**
-     * 断言多个API的状态码（Serenity报告集成版）
-     * 
-     * @param apiExpectations API期望值映射表（URL模式 -> 期望状态码）
-     */
-    public static void assertMultipleApiStatusCodes(Map<String, Integer> apiExpectations) {
-        List<String> failures = new ArrayList<>();
-        
-        for (Map.Entry<String, Integer> entry : apiExpectations.entrySet()) {
-            String urlPattern = entry.getKey();
-            int expectedStatus = entry.getValue();
-            
-            ApiCallRecord record = getLastApiCallByUrl(urlPattern);
-            
-            if (record == null) {
-                failures.add(String.format("No API call for pattern '%s' (expected status: %d)", 
-                        urlPattern, expectedStatus));
-                continue;
-            }
-            
-            if (record.getStatusCode() != expectedStatus) {
-                failures.add(String.format(
-                    "URL: %s - Expected: %d, Actual: %d",
-                    record.getUrl(), expectedStatus, record.getStatusCode()
-                ));
-            }
-        }
-        
-        if (!failures.isEmpty()) {
-            String errorMsg = "Multiple API status code verification failed:\n" + 
-                             String.join("\n", failures);
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
-        }
-        
-        logger.info("Multiple API status codes verification passed. Verified {} APIs", 
-                apiExpectations.size());
-    }
-    
-    /**
-     * 获取API调用详细报告（包含所有记录）
-     * 
-     * @return 包含所有API调用详细信息的字符串
-     */
-    public static String getDetailedApiReport() {
-        StringBuilder report = new StringBuilder();
-        report.append("=== API Monitoring Detailed Report ===\n");
-        report.append(String.format("Total API Calls: %d\n\n", apiCallHistory.size()));
-        
-        if (apiCallHistory.isEmpty()) {
-            report.append("No API calls recorded.");
-            return report.toString();
-        }
-        
-        for (int i = 0; i < apiCallHistory.size(); i++) {
-            ApiCallRecord record = apiCallHistory.get(i);
-            report.append(String.format("--- API Call #%d ---\n", i + 1));
-            report.append(String.format("URL: %s\n", record.getUrl()));
-            report.append(String.format("Method: %s\n", record.getMethod()));
-            report.append(String.format("Status Code: %d\n", record.getStatusCode()));
-            report.append(String.format("Response Time: %dms\n", record.getResponseTimeMs()));
-            report.append(String.format("Timestamp: %s\n", 
-                    new Date(record.getTimestamp()).toString()));
-            
-            if (record.getRequestBody() != null) {
-                report.append(String.format("Request Body: %s\n", 
-                        truncateString(String.valueOf(record.getRequestBody()), 200)));
-            }
-            
-            if (record.getResponseBody() != null) {
-                report.append(String.format("Response Body: %s\n", 
-                        truncateString(String.valueOf(record.getResponseBody()), 500)));
-            }
-            
-            report.append("\n");
-        }
-        
-        return report.toString();
-    }
-    
+
     // ==================== 实时API验证功能 ====================
     
     /**
@@ -1020,37 +594,53 @@ public class RealApiMonitor {
         realTimeValidationEnabled = true;
         logger.info("Real-time API validation enabled");
     }
-    
+
     /**
-     * 禁用实时API验证
-     */
-    public static void disableRealTimeValidation() {
-        realTimeValidationEnabled = false;
-        logger.info("Real-time API validation disabled");
-    }
-    
-    /**
-     * 设置API期望状态码
-     * 当实时验证启用时，API响应时会自动验证状态码
-     * 
+     * 设置API期望状态码（简单版本）
+     * API响应时会自动验证状态码
+     *
      * @param urlPattern URL匹配模式（支持正则表达式）
      * @param expectedStatusCode 期望的状态码
      */
     public static void expectApiStatus(String urlPattern, int expectedStatusCode) {
-        apiExpectations.put(urlPattern, expectedStatusCode);
+        apiExpectations.put(urlPattern, ApiExpectation.forUrl(urlPattern).statusCode(expectedStatusCode));
         logger.info("Added API expectation: {} -> {}", urlPattern, expectedStatusCode);
     }
-    
+
     /**
-     * 批量设置API期望状态码
-     * 
+     * 批量设置API期望状态码（简单版本）
+     *
      * @param expectations URL模式 -> 期望状态码的映射
      */
     public static void expectMultipleApiStatus(Map<String, Integer> expectations) {
-        apiExpectations.putAll(expectations);
+        for (Map.Entry<String, Integer> entry : expectations.entrySet()) {
+            apiExpectations.put(entry.getKey(), ApiExpectation.forUrl(entry.getKey()).statusCode(entry.getValue()));
+        }
         logger.info("Added {} API expectations", expectations.size());
     }
-    
+
+    /**
+     * 设置API期望（高级版本，支持多维度验证）
+     *
+     * @param expectation API期望对象
+     */
+    public static void expectApi(ApiExpectation expectation) {
+        apiExpectations.put(expectation.getUrlPattern(), expectation);
+        logger.info("Added API expectation: {} -> {}", expectation.getUrlPattern(), expectation.getDescription());
+    }
+
+    /**
+     * 批量设置API期望（高级版本）
+     *
+     * @param expectations API期望对象列表
+     */
+    public static void expectMultipleApi(List<ApiExpectation> expectations) {
+        for (ApiExpectation expectation : expectations) {
+            apiExpectations.put(expectation.getUrlPattern(), expectation);
+        }
+        logger.info("Added {} API expectations", expectations.size());
+    }
+
     /**
      * 清除所有API期望
      */
@@ -1058,48 +648,29 @@ public class RealApiMonitor {
         apiExpectations.clear();
         logger.info("Cleared all API expectations");
     }
-    
+
     /**
      * 实时验证API响应
      * 当API响应时，检查是否有匹配的期望，如果有则验证
-     * 
+     *
      * @param record API调用记录
      */
     private static void validateRealTimeApi(ApiCallRecord record) {
         if (apiExpectations.isEmpty()) {
             return; // 没有设置期望，跳过验证
         }
-        
+
         // 检查是否有匹配的期望
-        for (Map.Entry<String, Integer> entry : apiExpectations.entrySet()) {
+        for (Map.Entry<String, ApiExpectation> entry : apiExpectations.entrySet()) {
             String urlPattern = entry.getKey();
-            int expectedStatus = entry.getValue();
-            
+            ApiExpectation expectation = entry.getValue();
+
             // 检查URL是否匹配模式
             try {
                 Pattern pattern = Pattern.compile(urlPattern);
                 if (pattern.matcher(record.getUrl()).matches()) {
-                    // 找到匹配的期望，进行验证
-                    if (record.getStatusCode() != expectedStatus) {
-                        String errorMsg = String.format(
-                            "Real-time API validation failed%n" +
-                            "URL: %s%n" +
-                            "Method: %s%n" +
-                            "Expected Status Code: %d%n" +
-                            "Actual Status Code: %d%n" +
-                            "Response Body: %s",
-                            record.getUrl(),
-                            record.getMethod(),
-                            expectedStatus,
-                            record.getStatusCode(),
-                            truncateString(String.valueOf(record.getResponseBody()), 500)
-                        );
-                        logger.error(errorMsg);
-                        throw new AssertionError(errorMsg);
-                    } else {
-                        logger.info("Real-time API validation passed. URL: {}, Status: {}", 
-                                record.getUrl(), record.getStatusCode());
-                    }
+                    // 找到匹配的期望，进行多维度验证
+                    expectation.validate(record);
                     // 找到匹配后立即返回
                     return;
                 }
@@ -1114,39 +685,21 @@ public class RealApiMonitor {
      *
      * @return API期望映射
      */
-    public static Map<String, Integer> getApiExpectations() {
+    public static Map<String, ApiExpectation> getApiExpectations() {
         return new HashMap<>(apiExpectations);
     }
 
     /**
-     * 等待特定API被调用
+     * 截断字符串到指定长度
      *
-     * @param urlPattern URL匹配模式
+     * @param str 原始字符串
+     * @param maxLength 最大长度
+     * @return 截断后的字符串
      */
-    public static void waitForApiCalled(String urlPattern) {
-        int maxWait = 10000; // 最多等待10秒
-        int checkInterval = 100; // 每100ms检查一次
-        long startTime = System.currentTimeMillis();
 
-        while (System.currentTimeMillis() - startTime < maxWait) {
-            if (isApiCalled(urlPattern)) {
-                logger.info("API called: {}", urlPattern);
-                return;
-            }
-            try {
-                Thread.sleep(checkInterval);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted while waiting for API: " + urlPattern);
-            }
-        }
-
-        throw new AssertionError("Timed out waiting for API to be called: " + urlPattern);
-    }
-    
     /**
      * 截断字符串到指定长度
-     * 
+     *
      * @param str 原始字符串
      * @param maxLength 最大长度
      * @return 截断后的字符串
@@ -1159,5 +712,310 @@ public class RealApiMonitor {
             return str;
         }
         return str.substring(0, maxLength) + "... (truncated)";
+    }
+
+    // ==================== API Monitor Builder ====================
+
+    /**
+     * API监控构建器 - 使用Builder模式配置API监控
+     *
+     * 示例用法（简单验证）：
+     * RealApiMonitor.with(context)
+     *     .monitorApi(".*auth/login.*", 200)
+     *     .monitorApi(".*api/users.*", 200)
+     *     .build();
+     *
+     * 示例用法（多维度验证）：
+     * RealApiMonitor.with(context)
+     *     .expectApi(ApiExpectation.forUrl(".*auth/login.*")
+     *         .statusCode(200)
+     *         .responseTimeLessThan(1000))
+     *     .expectApi(ApiExpectation.forUrl(".*api/users.*")
+     *         .statusCode(200)
+     *         .responseBodyContains("data"))
+     *     .build();
+     */
+    public static class ApiMonitorBuilder {
+        private final BrowserContext context;
+        private final Map<String, ApiExpectation> apiExpectations = new HashMap<>();
+        private boolean autoClearHistory = true;
+
+        private ApiMonitorBuilder(BrowserContext context) {
+            this.context = context;
+        }
+
+        /**
+         * 添加要监控的API及其期望状态码（简单版本）
+         *
+         * @param urlPattern URL匹配模式（支持普通URL或正则）
+         * @param expectedStatusCode 期望的状态码
+         * @return this构建器实例
+         */
+        public ApiMonitorBuilder monitorApi(String urlPattern, int expectedStatusCode) {
+            String pattern = toRegexPattern(urlPattern);
+            apiExpectations.put(pattern, ApiExpectation.forUrl(pattern).statusCode(expectedStatusCode));
+            return this;
+        }
+
+        /**
+         * 添加要监控的API及其完整期望（高级版本）
+         *
+         * @param expectation API期望对象
+         * @return this构建器实例
+         */
+        public ApiMonitorBuilder expectApi(ApiExpectation expectation) {
+            apiExpectations.put(expectation.getUrlPattern(), expectation);
+            return this;
+        }
+
+        /**
+         * 批量添加要监控的API（简单版本，仅状态码）
+         *
+         * @param expectations API期望映射
+         * @return this构建器实例
+         */
+        public ApiMonitorBuilder monitorApis(Map<String, Integer> expectations) {
+            for (Map.Entry<String, Integer> entry : expectations.entrySet()) {
+                String pattern = toRegexPattern(entry.getKey());
+                apiExpectations.put(pattern, ApiExpectation.forUrl(pattern).statusCode(entry.getValue()));
+            }
+            return this;
+        }
+
+        /**
+         * 是否自动清空历史记录（默认true）
+         *
+         * @param autoClear true表示自动清空，false表示不清空
+         * @return this构建器实例
+         */
+        public ApiMonitorBuilder autoClearHistory(boolean autoClear) {
+            this.autoClearHistory = autoClear;
+            return this;
+        }
+
+        /**
+         * 构建并启动监控
+         */
+        public void build() {
+            logger.info("========== Building API Monitor ==========");
+            logger.info("Total APIs to monitor: {}", apiExpectations.size());
+            for (Map.Entry<String, ApiExpectation> entry : apiExpectations.entrySet()) {
+                logger.info("  - {} -> {}", entry.getKey(), entry.getValue().getDescription());
+            }
+
+            if (autoClearHistory) {
+                RealApiMonitor.clearHistory();
+            }
+
+            RealApiMonitor.clearApiExpectations();
+
+            // 实时验证总是启用
+            RealApiMonitor.enableRealTimeValidation();
+
+            if (!apiExpectations.isEmpty()) {
+                // 直接将ApiExpectation对象添加到RealApiMonitor的期望映射中
+                for (Map.Entry<String, ApiExpectation> entry : apiExpectations.entrySet()) {
+                    RealApiMonitor.apiExpectations.put(entry.getKey(), entry.getValue());
+                }
+            }
+
+            if (apiExpectations.size() == 1) {
+                // 只有一个API，使用特定模式监控
+                String pattern = apiExpectations.keySet().iterator().next();
+                RealApiMonitor.monitorApi(context, pattern);
+            } else {
+                // 多个API，监控所有API
+                RealApiMonitor.monitorAllApi(context);
+            }
+
+            logger.info("✅ API Monitor built successfully!");
+        }
+    }
+
+    // ==================== API Expectation ====================
+
+    /**
+     * API期望类 - 支持多维度验证
+     *
+     * 示例用法：
+     * ApiExpectation.forUrl(".*auth/login.*")
+     *     .statusCode(200)
+     *     .responseTimeLessThan(1000)
+     *     .responseBodyContains("token")
+     *     .responseHeaderContains("Content-Type", "application/json");
+     */
+    public static class ApiExpectation {
+        private final String urlPattern;
+        private Integer expectedStatusCode;
+        private Long maxResponseTime;
+        private String expectedResponseBodyContent;
+        private String expectedResponseHeaderName;
+        private String expectedResponseHeaderValue;
+
+        private ApiExpectation(String urlPattern) {
+            this.urlPattern = urlPattern;
+        }
+
+        /**
+         * 创建API期望对象
+         *
+         * @param urlPattern URL匹配模式（支持普通URL如 "/api/xxx" 或正则如 ".*api/users.*"）
+         *                普通URL会自动转换为正则表达式
+         * @return ApiExpectation对象
+         */
+        public static ApiExpectation forUrl(String urlPattern) {
+            // 自动将普通URL转换为正则表达式
+            String pattern = RealApiMonitor.toRegexPattern(urlPattern);
+            return new ApiExpectation(pattern);
+        }
+
+        /**
+         * 设置期望的状态码
+         *
+         * @param statusCode 期望的状态码
+         * @return this
+         */
+        public ApiExpectation statusCode(int statusCode) {
+            this.expectedStatusCode = statusCode;
+            return this;
+        }
+
+        /**
+         * 设置期望的最大响应时间
+         *
+         * @param maxTimeMs 最大响应时间（毫秒）
+         * @return this
+         */
+        public ApiExpectation responseTimeLessThan(long maxTimeMs) {
+            this.maxResponseTime = maxTimeMs;
+            return this;
+        }
+
+        /**
+         * 设置期望的响应体包含内容
+         *
+         * @param content 期望包含的内容
+         * @return this
+         */
+        public ApiExpectation responseBodyContains(String content) {
+            this.expectedResponseBodyContent = content;
+            return this;
+        }
+
+        /**
+         * 设置期望的响应头
+         *
+         * @param headerName 响应头名称
+         * @param headerValue 期望的响应头值（支持部分匹配）
+         * @return this
+         */
+        public ApiExpectation responseHeaderContains(String headerName, String headerValue) {
+            this.expectedResponseHeaderName = headerName;
+            this.expectedResponseHeaderValue = headerValue;
+            return this;
+        }
+
+        /**
+         * 获取URL模式
+         */
+        public String getUrlPattern() {
+            return urlPattern;
+        }
+
+        /**
+         * 获取期望描述
+         */
+        public String getDescription() {
+            StringBuilder desc = new StringBuilder();
+            if (expectedStatusCode != null) {
+                desc.append("Status=").append(expectedStatusCode);
+            }
+            if (maxResponseTime != null) {
+                if (desc.length() > 0) desc.append(", ");
+                desc.append("Time<").append(maxResponseTime).append("ms");
+            }
+            if (expectedResponseBodyContent != null) {
+                if (desc.length() > 0) desc.append(", ");
+                desc.append("Body contains '").append(expectedResponseBodyContent).append("'");
+            }
+            if (expectedResponseHeaderName != null) {
+                if (desc.length() > 0) desc.append(", ");
+                desc.append("Header[").append(expectedResponseHeaderName).append("] contains '").append(expectedResponseHeaderValue).append("'");
+            }
+            return desc.length() > 0 ? desc.toString() : "No validation";
+        }
+
+        /**
+         * 验证API调用记录
+         *
+         * @param record API调用记录
+         * @throws AssertionError 如果验证失败
+         */
+        public void validate(ApiCallRecord record) {
+            List<String> failures = new ArrayList<>();
+
+            // 验证状态码
+            if (expectedStatusCode != null && record.getStatusCode() != expectedStatusCode) {
+                failures.add(String.format(
+                    "Status Code Mismatch: Expected %d, Actual %d",
+                    expectedStatusCode, record.getStatusCode()
+                ));
+            }
+
+            // 验证响应时间
+            if (maxResponseTime != null && record.getResponseTimeMs() > maxResponseTime) {
+                failures.add(String.format(
+                    "Response Time Exceeded: Expected <%dms, Actual %dms",
+                    maxResponseTime, record.getResponseTimeMs()
+                ));
+            }
+
+            // 验证响应体内容
+            if (expectedResponseBodyContent != null) {
+                String responseBody = String.valueOf(record.getResponseBody());
+                if (responseBody == null || !responseBody.contains(expectedResponseBodyContent)) {
+                    failures.add(String.format(
+                        "Response Body Does Not Contain: Expected '%s' in response",
+                        expectedResponseBodyContent
+                    ));
+                }
+            }
+
+            // 验证响应头
+            if (expectedResponseHeaderName != null) {
+                String actualHeaderValue = record.getResponseHeaders().get(expectedResponseHeaderName);
+                if (actualHeaderValue == null || !actualHeaderValue.contains(expectedResponseHeaderValue)) {
+                    failures.add(String.format(
+                        "Response Header Mismatch: Expected '%s' to contain '%s', Actual '%s'",
+                        expectedResponseHeaderName, expectedResponseHeaderValue, actualHeaderValue
+                    ));
+                }
+            }
+
+            // 如果有失败项，抛出异常
+            if (!failures.isEmpty()) {
+                String errorMsg = String.format(
+                    "Real-time API Validation Failed%n" +
+                    "URL: %s%n" +
+                    "Method: %s%n" +
+                    "%s%n" +
+                    "Response Body: %s",
+                    record.getUrl(),
+                    record.getMethod(),
+                    String.join("%n", failures),
+                    truncateString(String.valueOf(record.getResponseBody()), 500)
+                );
+                logger.error(errorMsg);
+                throw new AssertionError(errorMsg);
+            }
+
+            // 验证通过
+            logger.info("✅ API monitoring PASSED! URL: {}, Method: {}, Status: {}, Time: {}ms - ({})",
+                    record.getUrl(),
+                    record.getMethod(),
+                    record.getStatusCode(),
+                    record.getResponseTimeMs(),
+                    getDescription());
+        }
     }
 }

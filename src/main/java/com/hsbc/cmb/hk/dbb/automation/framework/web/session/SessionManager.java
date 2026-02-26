@@ -48,6 +48,35 @@ import java.util.Map;
  *   Example: playwright.no.login.session.timeout.minutes=60
  *
  * Session Storage: target/.sessions/
+ *
+ * 使用方式（按简洁程度排序）：
+ *
+ * 【超简】智能登录（推荐） - 自动推断环境：
+ *   SessionManager.smartLogin(username, homeUrl, () -> loginPage.login());
+ *   SessionManager.smartLogin(username, () -> loginPage.login()); // 无homeUrl
+ *
+ * 【超简】智能恢复 - 自动推断环境：
+ *   if (SessionManager.smartRestore(username)) { 跳过登录  }
+ *   SessionManager.smartSave(username, homeUrl);
+ *   SessionManager.smartClear(username);
+ *
+ * 【推荐】保存Session - 一行代码：
+ *   saveSession(username, "https://example.com/home");
+ *   saveSession(env, username, "https://example.com/home");
+ *
+ * 【推荐】尝试恢复Session - 自动跳过登录（如果可用）：
+ *   if (tryRestoreAndSkipLogin(username, loginRunnable)) {  跳过 }
+ *
+ * 【推荐】完整流程：恢复或登录并保存：
+ *   restoreOrLogin(username, homeUrl, () -> loginPage.login());
+ *
+ * 【简化】检查是否可跳过登录：
+ *   if (canSkipLogin(username)) { 可以跳过登录 }
+ *
+ * 【传统】分步操作（向后兼容）：
+ *   if (restoreSession(username)) {  已恢复  }
+ *   markUserLoggedIn(username);
+ *   saveSession(username, homeUrl);
  */
 public class SessionManager {
 
@@ -344,7 +373,10 @@ public class SessionManager {
             // Update access time to extend session validity
             session.updateAccessTime();
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session restored for session key: {}", sessionKey);
+            // Persist updated session to file to extend timeout
+            persistSessionToFile(session, env, username, browser);
+
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session restored and updated for session key: {}", sessionKey);
             return true;
         } catch (Exception e) {
             logger.error("Failed to restore session for session key: {}", sessionKey, e);
@@ -579,6 +611,368 @@ public class SessionManager {
         } catch (Exception e) {
             logger.error("Failed to clear all sessions", e);
         }
+    }
+
+    /**
+     * 持久化session到文件（更新时间戳）
+     * 用于在恢复session时更新访问时间，延长session有效期
+     *
+     * @param session User session
+     * @param env Environment identifier
+     * @param username Username
+     * @param browser Browser type
+     */
+    private static void persistSessionToFile(UserSession session, String env, String username, String browser) {
+        try {
+            // Update access time
+            session.updateAccessTime();
+
+            // Save to file
+            Path sessionDir = Paths.get(SESSION_DIR);
+            if (!Files.exists(sessionDir)) {
+                Files.createDirectories(sessionDir);
+            }
+
+            String sessionKey = generateSessionKey(env, username, browser);
+            String sessionFile = sessionDir.resolve(sessionKey + ".session").toString();
+
+            try (Writer writer = new OutputStreamWriter(
+                    new BufferedOutputStream(new FileOutputStream(sessionFile), 8192),
+                    StandardCharsets.UTF_8)) {
+                GSON.toJson(session, writer);
+            }
+
+            LoggingConfigUtil.logDebugIfVerbose(logger, "✅ Session persisted and updated: {}", sessionKey);
+        } catch (Exception e) {
+            logger.warn("Failed to persist session update (session will still be restored)", e);
+        }
+    }
+
+    // ==================== 超级简化API（最常用，智能推断） ====================
+
+    /**
+     * 【超简】智能登录管理 - 一行代码搞定！
+     * 自动处理所有逻辑：检查session、恢复session、执行登录、保存session
+     *
+     * 特性：
+     * - 自动推断环境（从BDDUtils获取）
+     * - 自动推断浏览器类型
+     * - 自动处理session过期
+     * - 自动更新session时间戳
+     *
+     * @param username Username
+     * @param homeUrl 登录成功后的首页URL（可为null）
+     * @param loginOperation 登录操作（如果session不可用，会执行此操作）
+     * @return true表示使用了已有session，false表示执行了登录
+     *
+     * 示例：
+     * SessionManager.smartLogin(username, homeUrl, () -> {
+     *     loginPage.login(username, password);
+     * });
+     */
+    public static boolean smartLogin(String username, String homeUrl, Runnable loginOperation) {
+        // 自动推断环境（如果配置了）
+        String env = inferEnvironment();
+        return restoreOrLogin(env, username, homeUrl, loginOperation);
+    }
+
+    /**
+     * 【超简】智能登录管理（无homeUrl版本）
+     *
+     * @param username Username
+     * @param loginOperation 登录操作
+     * @return true表示使用了已有session，false表示执行了登录
+     *
+     * 示例：
+     * SessionManager.smartLogin(username, () -> {
+     *     loginPage.login(username, password);
+     * });
+     */
+    public static boolean smartLogin(String username, Runnable loginOperation) {
+        return smartLogin(username, null, loginOperation);
+    }
+
+    /**
+     * 【超简】智能恢复Session - 一行代码！
+     * 自动推断环境和浏览器类型
+     *
+     * @param username Username
+     * @return true表示session已恢复，false表示需要登录
+     *
+     * 示例：
+     * if (SessionManager.smartRestore(username)) {
+     *     // Session已恢复，跳过登录
+     * } else {
+     *     // 需要登录
+     * }
+     */
+    public static boolean smartRestore(String username) {
+        String env = inferEnvironment();
+        return restoreSession(env, username);
+    }
+
+    /**
+     * 【超简】智能保存Session - 一行代码！
+     * 自动推断环境和浏览器类型
+     *
+     * @param username Username
+     * @param homeUrl 首页URL
+     *
+     * 示例：
+     * SessionManager.smartSave(username, homeUrl);
+     */
+    public static void smartSave(String username, String homeUrl) {
+        String env = inferEnvironment();
+        saveSessionAfterLogin(env, username, homeUrl);
+    }
+
+    /**
+     * 【超简】智能清除Session - 一行代码！
+     * 自动推断环境和浏览器类型
+     *
+     * @param username Username
+     *
+     * 示例：
+     * SessionManager.smartClear(username);
+     */
+    public static void smartClear(String username) {
+        String env = inferEnvironment();
+        clearSession(env, username);
+    }
+
+    /**
+     * 【超简】智能检查是否可跳过登录 - 一行代码！
+     * 自动推断环境和浏览器类型
+     *
+     * @param username Username
+     * @return true表示可以跳过登录
+     *
+     * 示例：
+     * if (SessionManager.smartCanSkip(username)) {
+     *     // 跳过登录
+     * }
+     */
+    public static boolean smartCanSkip(String username) {
+        String env = inferEnvironment();
+        return canSkipLogin(env, username);
+    }
+
+    /**
+     * 自动推断环境
+     * 尝试从BDDUtils或系统属性获取环境
+     */
+    private static String inferEnvironment() {
+        // 尝试从BDDUtils获取（如果可用）
+        try {
+            Object envObj = Class.forName("com.hsbc.cmb.hk.dbb.automation.tests.utils.BDDUtils")
+                .getMethod("getEnvironment")
+                .invoke(null);
+            if (envObj instanceof String) {
+                return (String) envObj;
+            }
+        } catch (Exception e) {
+            // 忽略，使用null
+        }
+
+        // 尝试从系统属性获取
+        String env = System.getProperty("playwright.environment");
+        if (env != null && !env.isEmpty()) {
+            return env;
+        }
+
+        return null; // 使用默认环境
+    }
+
+    // ==================== 简化API（最常用） ====================
+
+    /**
+     * 【简化】检查是否可以跳过登录
+     * 检查session是否存在且未过期
+     *
+     * @param username Username
+     * @return true表示可以跳过登录，false表示需要登录
+     *
+     * 示例：
+     * if (canSkipLogin(username)) {
+     *     // 跳过登录，直接使用已有session
+     * } else {
+     *     // 执行登录流程
+     * }
+     */
+    public static boolean canSkipLogin(String username) {
+        return isUserLoggedIn(username);
+    }
+
+    /**
+     * 【简化】检查是否可以跳过登录（带环境）
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @return true表示可以跳过登录，false表示需要登录
+     *
+     * 示例：
+     * if (canSkipLogin("O88_SIT1", username)) {
+     *     // 跳过登录
+     * }
+     */
+    public static boolean canSkipLogin(String env, String username) {
+        return isUserLoggedIn(env, username);
+    }
+
+    /**
+     * 【推荐】尝试恢复Session并跳过登录（如果可用）
+     * 这是最常用的方法：自动处理session恢复和登录流程
+     *
+     * 注意：当session成功恢复并跳过登录时，会自动更新session的时间戳，延长session有效期
+     *
+     * @param username Username
+     * @param loginOperation 登录操作（如果session不可用，会执行此操作）
+     * @return true表示session已恢复并跳过登录，false表示执行了登录操作
+     *
+     * 示例：
+     * if (SessionManager.tryRestoreAndSkipLogin(username, () -> {
+     *     loginSteps.login(username, password);
+     * })) {
+     *     // Session已恢复，跳过登录
+     *     // 同时session时间戳已更新，有效期延长
+     * } else {
+     *     // 执行了登录操作
+     * }
+     */
+    public static boolean tryRestoreAndSkipLogin(String username, Runnable loginOperation) {
+        if (restoreSession(username)) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session restored for {}, skipping login", username);
+            return true; // Session已恢复，跳过登录，时间戳已更新
+        }
+
+        // Session不可用，执行登录
+        LoggingConfigUtil.logInfoIfVerbose(logger, "No valid session for {}, executing login", username);
+        if (loginOperation != null) {
+            try {
+                loginOperation.run();
+            } catch (Exception e) {
+                logger.error("Login operation failed for user: {}", username, e);
+                throw new RuntimeException("Login failed", e);
+            }
+        }
+        return false; // 执行了登录操作
+    }
+
+    /**
+     * 【推荐】尝试恢复Session并跳过登录（如果可用，带环境）
+     *
+     * 注意：当session成功恢复并跳过登录时，会自动更新session的时间戳，延长session有效期
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @param loginOperation 登录操作（如果session不可用，会执行此操作）
+     * @return true表示session已恢复并跳过登录，false表示执行了登录操作
+     *
+     * 示例：
+     * if (SessionManager.tryRestoreAndSkipLogin("O88_SIT1", username, () -> {
+     *     loginSteps.login(username, password);
+     * })) {
+     *     // Session已恢复，跳过登录
+     *     // 同时session时间戳已更新，有效期延长
+     * }
+     */
+    public static boolean tryRestoreAndSkipLogin(String env, String username, Runnable loginOperation) {
+        if (restoreSession(env, username)) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session restored for {}/{}, skipping login", env, username);
+            return true; // Session已恢复，跳过登录，时间戳已更新
+        }
+
+        // Session不可用，执行登录
+        LoggingConfigUtil.logInfoIfVerbose(logger, "No valid session for {}/{}, executing login", env, username);
+        if (loginOperation != null) {
+            try {
+                loginOperation.run();
+            } catch (Exception e) {
+                logger.error("Login operation failed for user: {}/{}", env, username, e);
+                throw new RuntimeException("Login failed", e);
+            }
+        }
+        return false; // 执行了登录操作
+    }
+
+    /**
+     * 【简化】登录后保存Session - 一行代码
+     * 自动标记用户已登录并保存session
+     *
+     * @param username Username
+     * @param homeUrl 登录成功后的首页URL
+     *
+     * 示例：
+     * loginSteps.login(username, password);
+     * saveSessionAfterLogin(username, "https://example.com/home");
+     */
+    public static void saveSessionAfterLogin(String username, String homeUrl) {
+        markUserLoggedIn(username);
+        saveSession(username, homeUrl);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session saved after login for user: {}", username);
+    }
+
+    /**
+     * 【简化】登录后保存Session - 一行代码（带环境）
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @param homeUrl 登录成功后的首页URL
+     *
+     * 示例：
+     * loginSteps.login(username, password);
+     * saveSessionAfterLogin("O88_SIT1", username, "https://example.com/home");
+     */
+    public static void saveSessionAfterLogin(String env, String username, String homeUrl) {
+        markUserLoggedIn(env, username);
+        saveSession(env, username, homeUrl);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Session saved after login for user: {}/{}", env, username);
+    }
+
+    /**
+     * 【简化】完整流程：尝试恢复或登录并保存
+     * 这是一个便捷方法，封装了整个登录流程
+     *
+     * @param username Username
+     * @param homeUrl 登录成功后的首页URL
+     * @param loginOperation 登录操作（如果session不可用，会执行此操作）
+     * @return true表示使用已有session，false表示执行了登录
+     *
+     * 示例：
+     * SessionManager.restoreOrLogin(username, "https://example.com/home", () -> {
+     *     loginSteps.login(username, password);
+     * });
+     */
+    public static boolean restoreOrLogin(String username, String homeUrl, Runnable loginOperation) {
+        boolean skippedLogin = tryRestoreAndSkipLogin(username, loginOperation);
+        if (!skippedLogin && homeUrl != null) {
+            // 执行了登录，保存session
+            saveSessionAfterLogin(username, homeUrl);
+        }
+        return skippedLogin;
+    }
+
+    /**
+     * 【简化】完整流程：尝试恢复或登录并保存（带环境）
+     *
+     * @param env Environment identifier (e.g., O88_SIT1, O63_SIT1)
+     * @param username Username
+     * @param homeUrl 登录成功后的首页URL
+     * @param loginOperation 登录操作（如果session不可用，会执行此操作）
+     * @return true表示使用已有session，false表示执行了登录
+     *
+     * 示例：
+     * SessionManager.restoreOrLogin("O88_SIT1", username, "https://example.com/home", () -> {
+     *     loginSteps.login(username, password);
+     * });
+     */
+    public static boolean restoreOrLogin(String env, String username, String homeUrl, Runnable loginOperation) {
+        boolean skippedLogin = tryRestoreAndSkipLogin(env, username, loginOperation);
+        if (!skippedLogin && homeUrl != null) {
+            // 执行了登录，保存session
+            saveSessionAfterLogin(env, username, homeUrl);
+        }
+        return skippedLogin;
     }
 
     /**
