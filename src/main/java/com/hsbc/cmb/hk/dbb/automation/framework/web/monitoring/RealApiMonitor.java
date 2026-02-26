@@ -16,30 +16,144 @@ import static org.hamcrest.Matchers.lessThanOrEqualTo;
 
 /**
  * Real API Monitor - 监控真实API响应状态码
- * 
+ *
  * 功能：
  * 1. 监控真实API请求和响应
  * 2. 记录API调用历史（包括真实的响应状态码）
  * 3. 验证API响应状态码是否符合预期
  * 4. 支持按URL、方法等条件过滤API调用记录
  * 5. 不修改API请求和响应，只进行监控
- * 
- * 限制：
- * - 由于Playwright API限制，精确的响应时间可能无法获取（返回0）
- * - 响应时间验证功能因此受限
+ *
+ * 使用方式（从简单到复杂）：
+ * - 超简单（单个）：monitorOnlyApiAndVerify(page, ".*api/.*", 200) - 一行代码搞定
+ * - 超简单（多个）：monitorMultipleApisAndVerify(page, map) - 批量设置
+ * - 只监控：monitorOnlyApi(page, ".*api/.*") + assertStatusCode() - 灵活手动验证
+ *
  */
 public class RealApiMonitor {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(RealApiMonitor.class);
-    
+
     // 存储所有API调用记录
     private static final List<ApiCallRecord> apiCallHistory = new CopyOnWriteArrayList<>();
-    
+
     // 存储已注册的监听器
     private static final Map<Page, Set<ResponseListener>> pageListeners = new HashMap<>();
-    
+
     // 存储已注册的监听器（针对BrowserContext）
     private static final Map<BrowserContext, Set<ResponseListener>> contextListeners = new HashMap<>();
+
+    // 存储API期望（URL模式 -> 期望状态码）
+    private static final Map<String, Integer> apiExpectations = new HashMap<>();
+
+    // 是否启用实时验证
+    private static volatile boolean realTimeValidationEnabled = false;
+
+    // ==================== 简化API（最常用） ====================
+
+    /**
+     * 【最简单】监控单个API并自动验证 - 一行代码搞定！
+     * 自动清空历史、启用验证、设置期望、开始监控、API响应时自动验证
+     *
+     * @param page Playwright Page对象
+     * @param urlPattern URL匹配模式（支持普通URL如 "/api/xxx" 或正则如 ".*api/users.*"）
+     * @param expectedStatusCode 期望的状态码（如 200）
+     *
+     * 示例：
+     * RealApiMonitor.monitorOnlyApiAndVerify(page, ".*auth/login.*", 200);
+     * RealApiMonitor.monitorOnlyApiAndVerify(page, "/api/users", 200); // 自动转换为正则
+     */
+    public static void monitorOnlyApiAndVerify(Page page, String urlPattern, int expectedStatusCode) {
+        String pattern = toRegexPattern(urlPattern);
+        clearHistory();
+        clearApiExpectations();
+        enableRealTimeValidation();
+        expectApiStatus(pattern, expectedStatusCode);
+        monitorApi(page, pattern);
+    }
+
+    /**
+     * 【最简单】监控多个API并自动验证 - 批量设置
+     *
+     * @param page Playwright Page对象
+     * @param expectations API期望映射（URL模式 -> 期望状态码，支持普通URL或正则）
+     *
+     * 示例：
+     * Map<String, Integer> map = new HashMap<>();
+     * map.put(".*api/users.*", 200);
+     * map.put(".*api/products.*", 200);
+     * RealApiMonitor.monitorMultipleApisAndVerify(page, map);
+     * // 或使用普通URL
+     * map.put("/api/users", 200);
+     * map.put("/api/products", 200);
+     */
+    public static void monitorMultipleApisAndVerify(Page page, Map<String, Integer> expectations) {
+        // 转换普通URL为正则表达式
+        Map<String, Integer> convertedExpectations = new HashMap<>();
+        for (Map.Entry<String, Integer> entry : expectations.entrySet()) {
+            convertedExpectations.put(toRegexPattern(entry.getKey()), entry.getValue());
+        }
+        clearHistory();
+        clearApiExpectations();
+        enableRealTimeValidation();
+        expectMultipleApiStatus(convertedExpectations);
+        monitorAllApi(page);
+    }
+
+    /**
+     * 【最简单】只监控API，不自动验证 - 灵活手动验证
+     *
+     * @param page Playwright Page对象
+     * @param urlPattern URL匹配模式（支持普通URL或正则）
+     *
+     * 示例：
+     * RealApiMonitor.monitorOnlyApi(page, ".*api/.*");
+     * RealApiMonitor.monitorOnlyApi(page, "/api/users"); // 自动转换为正则
+     * // ... 执行操作
+     * RealApiMonitor.assertStatusCode(".*api/.*", 200); // 手动验证
+     */
+    public static void monitorOnlyApi(Page page, String urlPattern) {
+        String pattern = toRegexPattern(urlPattern);
+        clearHistory();
+        monitorApi(page, pattern);
+    }
+
+    /**
+     * 将普通URL模式转换为正则表达式
+     * 如果URL已经是正则表达式（包含.*、\\d等），则原样返回
+     * 否则自动添加.*前缀和后缀进行灵活匹配
+     *
+     * @param urlPattern URL模式（普通URL或正则表达式）
+     * @return 正则表达式模式
+     *
+     * 示例：
+     * - "/api/users" -> ".*api/users.*"
+     * - "api/users" -> ".*api/users.*"
+     * - ".*api/.*" -> ".*api/.*" (已经是正则，不转换)
+     */
+    private static String toRegexPattern(String urlPattern) {
+        if (urlPattern == null || urlPattern.isEmpty()) {
+            return ".*";
+        }
+
+        // 检查是否已经是正则表达式（包含常见的正则元字符）
+        boolean isRegex = urlPattern.contains(".*") || urlPattern.contains("\\d")
+                       || urlPattern.contains("?") || urlPattern.contains("+")
+                       || urlPattern.contains("\\w") || urlPattern.contains("\\s");
+
+        if (isRegex) {
+            return urlPattern; // 已经是正则表达式，直接返回
+        }
+
+        // 如果以 / 开头，去掉开头的 /，然后添加 .* 前后缀
+        // 例如：/api/users -> .*api/users.*
+        String normalized = urlPattern;
+        if (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+
+        return ".*" + normalized + ".*";
+    }
     
     /**
      * API调用记录
@@ -146,6 +260,11 @@ public class RealApiMonitor {
                     logger.info("Recorded API call: {} {} - Status: {}", 
                             request.method(), response.url(), response.status());
                     
+                    // 实时验证：如果启用了实时验证，立即检查API响应
+                    if (realTimeValidationEnabled) {
+                        validateRealTimeApi(record);
+                    }
+                    
                 } catch (Exception e) {
                     logger.error("Failed to record API call", e);
                 }
@@ -224,6 +343,11 @@ public class RealApiMonitor {
                     apiCallHistory.add(record);
                     logger.info("Recorded API call: {} {} - Status: {}", 
                             request.method(), response.url(), response.status());
+                    
+                    // 实时验证：如果启用了实时验证，立即检查API响应
+                    if (realTimeValidationEnabled) {
+                        validateRealTimeApi(record);
+                    }
                     
                 } catch (Exception e) {
                     logger.error("Failed to record API call", e);
@@ -884,6 +1008,140 @@ public class RealApiMonitor {
         }
         
         return report.toString();
+    }
+    
+    // ==================== 实时API验证功能 ====================
+    
+    /**
+     * 启用实时API验证
+     * 当API响应时，会立即检查是否符合预期，不符合时立即抛出异常
+     */
+    public static void enableRealTimeValidation() {
+        realTimeValidationEnabled = true;
+        logger.info("Real-time API validation enabled");
+    }
+    
+    /**
+     * 禁用实时API验证
+     */
+    public static void disableRealTimeValidation() {
+        realTimeValidationEnabled = false;
+        logger.info("Real-time API validation disabled");
+    }
+    
+    /**
+     * 设置API期望状态码
+     * 当实时验证启用时，API响应时会自动验证状态码
+     * 
+     * @param urlPattern URL匹配模式（支持正则表达式）
+     * @param expectedStatusCode 期望的状态码
+     */
+    public static void expectApiStatus(String urlPattern, int expectedStatusCode) {
+        apiExpectations.put(urlPattern, expectedStatusCode);
+        logger.info("Added API expectation: {} -> {}", urlPattern, expectedStatusCode);
+    }
+    
+    /**
+     * 批量设置API期望状态码
+     * 
+     * @param expectations URL模式 -> 期望状态码的映射
+     */
+    public static void expectMultipleApiStatus(Map<String, Integer> expectations) {
+        apiExpectations.putAll(expectations);
+        logger.info("Added {} API expectations", expectations.size());
+    }
+    
+    /**
+     * 清除所有API期望
+     */
+    public static void clearApiExpectations() {
+        apiExpectations.clear();
+        logger.info("Cleared all API expectations");
+    }
+    
+    /**
+     * 实时验证API响应
+     * 当API响应时，检查是否有匹配的期望，如果有则验证
+     * 
+     * @param record API调用记录
+     */
+    private static void validateRealTimeApi(ApiCallRecord record) {
+        if (apiExpectations.isEmpty()) {
+            return; // 没有设置期望，跳过验证
+        }
+        
+        // 检查是否有匹配的期望
+        for (Map.Entry<String, Integer> entry : apiExpectations.entrySet()) {
+            String urlPattern = entry.getKey();
+            int expectedStatus = entry.getValue();
+            
+            // 检查URL是否匹配模式
+            try {
+                Pattern pattern = Pattern.compile(urlPattern);
+                if (pattern.matcher(record.getUrl()).matches()) {
+                    // 找到匹配的期望，进行验证
+                    if (record.getStatusCode() != expectedStatus) {
+                        String errorMsg = String.format(
+                            "Real-time API validation failed%n" +
+                            "URL: %s%n" +
+                            "Method: %s%n" +
+                            "Expected Status Code: %d%n" +
+                            "Actual Status Code: %d%n" +
+                            "Response Body: %s",
+                            record.getUrl(),
+                            record.getMethod(),
+                            expectedStatus,
+                            record.getStatusCode(),
+                            truncateString(String.valueOf(record.getResponseBody()), 500)
+                        );
+                        logger.error(errorMsg);
+                        throw new AssertionError(errorMsg);
+                    } else {
+                        logger.info("Real-time API validation passed. URL: {}, Status: {}", 
+                                record.getUrl(), record.getStatusCode());
+                    }
+                    // 找到匹配后立即返回
+                    return;
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to match URL pattern: {}", urlPattern, e);
+            }
+        }
+    }
+    
+    /**
+     * 获取所有已设置的API期望
+     *
+     * @return API期望映射
+     */
+    public static Map<String, Integer> getApiExpectations() {
+        return new HashMap<>(apiExpectations);
+    }
+
+    /**
+     * 等待特定API被调用
+     *
+     * @param urlPattern URL匹配模式
+     */
+    public static void waitForApiCalled(String urlPattern) {
+        int maxWait = 10000; // 最多等待10秒
+        int checkInterval = 100; // 每100ms检查一次
+        long startTime = System.currentTimeMillis();
+
+        while (System.currentTimeMillis() - startTime < maxWait) {
+            if (isApiCalled(urlPattern)) {
+                logger.info("API called: {}", urlPattern);
+                return;
+            }
+            try {
+                Thread.sleep(checkInterval);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while waiting for API: " + urlPattern);
+            }
+        }
+
+        throw new AssertionError("Timed out waiting for API to be called: " + urlPattern);
     }
     
     /**
