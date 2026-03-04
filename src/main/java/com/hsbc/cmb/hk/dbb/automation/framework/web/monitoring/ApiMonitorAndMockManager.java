@@ -30,8 +30,9 @@ import java.util.stream.Collectors;
  * 3. 修改请求信息（headers、query parameters、request body、method等）
  * 4. 记录API调用历史
  * 5. 动态响应生成
+ * 6. 针对特定API模拟弱网
  *
- * 使用方式（推荐使用Builder模式）：
+ * 【推荐使用方式】Builder模式 - 功能强大、链式调用、清晰易读：
  *
  * 【推荐】Builder模式 - Mock响应：
  *   ApiMonitorAndMockManager.mock(context)
@@ -50,31 +51,6 @@ import java.util.stream.Collectors;
  *               .setHeaders(Map.of("X-Custom", "value"));
  *       })
  *       .build();
- *
- * 【简化】单API Mock - 一行代码：
- *   mockDirectResponse(context, "/api/users", 200, "{\"status\":\"success\"}");
- *   mockDirectSuccess(context, "/api/users", "{\"status\":\"success\"}");
- *   mockDirectError(context, "/api/users", 500, "{\"status\":\"error\"}");
- *
- * 【简化】修改请求 - 一行代码：
- *   modifyRequestHeader(page, "/api/users", "Authorization", "Bearer token");
- *   modifyRequestBody(context, "/api/users", "{\"new\":\"body\"}");
- *   modifyRequestQueryParam(page, "/api/users", "userId", "123");
- *   modifyRequestMethod(context, "/api/users", "POST");
- *
- * 【高级】动态Mock - 基于请求生成响应：
- *   mockDynamic(context, "/api/users", (request, ctx) -> {
- *       String userId = extractUserId(request.url());
- *       return "{\"id\":" + userId + "}";
- *   });
- *
- * 【高级】自定义请求拦截器 - 完全控制请求：
- *   interceptRequest(context, "/api/users", (route, request) -> {
- *       return new Route.ContinueOptions()
- *           .setMethod("POST")
- *           .setPostData("{\"modified\":true}")
- *           .setHeaders(Map.of("X-Custom", "value"));
- *   });
  */
 public class ApiMonitorAndMockManager {
     
@@ -150,10 +126,9 @@ public class ApiMonitorAndMockManager {
         private Map<String, String> headers;
         private long delayMs; // 模拟延迟
         private boolean enabled;
-        private RequestModifier requestModifier; // 请求修改器（已废弃）
         private RequestInterceptor requestInterceptor; // 请求拦截器（新版）
         private ResponseGenerator responseGenerator; // 响应生成器
-        
+
         public MockRule(String name, String urlPattern) {
             this.name = name;
             this.urlPattern = urlPattern;
@@ -199,11 +174,6 @@ public class ApiMonitorAndMockManager {
             this.enabled = enabled;
             return this;
         }
-        
-        public MockRule requestModifier(RequestModifier requestModifier) {
-            this.requestModifier = requestModifier;
-            return this;
-        }
 
         public MockRule requestInterceptor(RequestInterceptor requestInterceptor) {
             this.requestInterceptor = requestInterceptor;
@@ -215,6 +185,8 @@ public class ApiMonitorAndMockManager {
             return this;
         }
 
+        // ==================== 网络模拟方法 ====================
+
         public String getName() { return name; }
         public String getUrlPattern() { return urlPattern; }
         public String getMethod() { return method; }
@@ -224,21 +196,10 @@ public class ApiMonitorAndMockManager {
         public Map<String, String> getHeaders() { return headers; }
         public long getDelayMs() { return delayMs; }
         public boolean isEnabled() { return enabled; }
-        @Deprecated
-        public RequestModifier getRequestModifier() { return requestModifier; }
         public RequestInterceptor getRequestInterceptor() { return requestInterceptor; }
         public ResponseGenerator getResponseGenerator() { return responseGenerator; }
     }
-    
-    /**
-     * 请求修改器接口（旧版，仅用于添加header）
-     * @deprecated 使用 RequestInterceptor 代替
-     */
-    @FunctionalInterface
-    @Deprecated
-    public interface RequestModifier {
-        void modify(Request request);
-    }
+
 
     /**
      * 请求拦截器接口（新版，支持全面的请求修改）
@@ -462,6 +423,9 @@ public class ApiMonitorAndMockManager {
 
         logger.info(" Mock API with timeout configured successfully!");
     }
+
+    // ==================== 针对特定API的弱网模拟 ====================
+    // 注意：以下方法已废弃，请使用Builder模式，API更清晰、更强大
 
     // ==================== 捕获后Mock - 基于真实响应修改字段 ====================
     // 适用场景：【场景2】需要基于真实API响应修改特定字段
@@ -1126,6 +1090,7 @@ public class ApiMonitorAndMockManager {
     }
 
     // ==================== 请求修改API（拦截并修改请求） ====================
+    // 注意：以下方法已废弃，请使用Builder模式
 
     /**
      * 【简化】修改请求 - 添加或替换请求头
@@ -1543,7 +1508,7 @@ public class ApiMonitorAndMockManager {
                 return;
             }
 
-            // 处理请求拦截（新版，支持全面修改）
+            // 处理请求拦截（支持全面修改）
             if (rule.requestInterceptor != null) {
                 Route.ResumeOptions continueOptions = rule.requestInterceptor.intercept(route, request);
                 if (continueOptions != null) {
@@ -1553,48 +1518,81 @@ public class ApiMonitorAndMockManager {
                 }
             }
 
-            // 处理请求修改（旧版，仅header）
-            if (rule.requestModifier != null) {
-                rule.requestModifier.modify(request);
-            }
-
-            // 模拟延迟
-            if (rule.getDelayMs() > 0) {
-                try {
-                    Thread.sleep(rule.getDelayMs());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-
-            // 获取Mock数据或生成响应
-            String mockData = getMockData(rule, route);
-
-            if (mockData != null) {
-                // 返回Mock响应
-                Route.FulfillOptions options = new Route.FulfillOptions()
-                    .setStatus(rule.getStatusCode())
-                    .setBody(mockData);
-
-                // 设置响应头
-                if (rule.getHeaders() != null && !rule.getHeaders().isEmpty()) {
-                    options.setHeaders(rule.getHeaders());
-                }
-
-                route.fulfill(options);
-                logger.info("Mock response sent for: {} with status: {}",
-                    request.url(), rule.getStatusCode());
-            } else {
-                logger.info("No mock data available for rule: {}, continuing original request", rule.getName());
-                route.resume();
-            }
+            // 普通Mock或延迟Mock
+            handleNormalMock(route, rule);
 
         } catch (Exception e) {
             logger.error("Error handling mock route for rule: " + rule.getName(), e);
             route.resume();
         }
     }
-    
+
+    /**
+     * 处理普通Mock（包括延迟）
+     */
+    private static void handleNormalMock(Route route, MockRule rule) {
+        Request request = route.request();
+
+        // 获取Mock数据或生成响应
+        String mockData = null;
+        try {
+            mockData = getMockData(rule, route);
+        } catch (Exception e) {
+            logger.error("Failed to get mock data for rule: {}, continuing original request", rule.getName(), e);
+        }
+
+        if (mockData != null) {
+            // 准备响应选项
+            Route.FulfillOptions options = new Route.FulfillOptions()
+                .setStatus(rule.getStatusCode())
+                .setBody(mockData);
+
+            // 设置响应头
+            if (rule.getHeaders() != null && !rule.getHeaders().isEmpty()) {
+                options.setHeaders(rule.getHeaders());
+            }
+
+            // 异步处理延迟 - 不阻塞其他API请求
+            if (rule.getDelayMs() > 0) {
+                new Thread(() -> {
+                    try {
+                        logger.info("Delaying response for {} by {}ms", request.url(), rule.getDelayMs());
+                        Thread.sleep(rule.getDelayMs());
+                        route.fulfill(options);
+                        logger.info("Mock response sent for: {} with status: {} after delay",
+                            request.url(), rule.getStatusCode());
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        logger.error("Delay interrupted for: {}", request.url(), e);
+                    } catch (Exception e) {
+                        logger.error("Failed to send delayed response for: {}", request.url(), e);
+                    }
+                }).start();
+            } else {
+                // 无延迟，立即返回响应
+                try {
+                    route.fulfill(options);
+                    logger.info("Mock response sent for: {} with status: {}",
+                        request.url(), rule.getStatusCode());
+                } catch (Exception e) {
+                    logger.error("Failed to fulfill mock response for: {}", request.url(), e);
+                    try {
+                        route.resume();
+                    } catch (Exception ex) {
+                        logger.error("Failed to resume route after fulfillment error for: {}", request.url(), ex);
+                    }
+                }
+            }
+        } else {
+            logger.info("No mock data available for rule: {}, continuing original request", rule.getName());
+            try {
+                route.resume();
+            } catch (Exception e) {
+                logger.error("Failed to resume route for: {}", request.url(), e);
+            }
+        }
+    }
+
     /**
      * 获取Mock数据
      */
@@ -1813,6 +1811,7 @@ public class ApiMonitorAndMockManager {
                     json.append("      \"statusCode\": ").append(rule.getStatusCode()).append(",\n");
                     json.append("      \"enabled\": ").append(rule.isEnabled()).append(",\n");
                     json.append("      \"delayMs\": ").append(rule.getDelayMs()).append("\n");
+
                     json.append("    }").append(index <= mockRules.size() ? "," : "").append("\n");
                 }
                 json.append("  ]\n");
@@ -2109,6 +2108,7 @@ public class ApiMonitorAndMockManager {
             }
             return this;
         }
+
 
         /**
          * 是否自动清空旧的Mock规则（默认true）

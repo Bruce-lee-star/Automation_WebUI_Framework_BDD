@@ -12,24 +12,9 @@ public class TimeoutConfig {
     private static final Logger logger = LoggerFactory.getLogger(TimeoutConfig.class);
     
     // 默认超时时间（毫秒）
-    private static final int DEFAULT_ELEMENT_TIMEOUT = 10000;      // 元素等待超时
     private static final int DEFAULT_PAGE_LOAD_TIMEOUT = 30000;    // 页面加载超时
     private static final int DEFAULT_NAVIGATION_TIMEOUT = 30000;   // 导航超时
-    private static final int DEFAULT_ACTION_TIMEOUT = 15000;        // 操作超时
-    private static final int DEFAULT_SHORT_TIMEOUT = 3000;         // 短超时
-    private static final int DEFAULT_LONG_TIMEOUT = 60000;         // 长超时
-    
-    /**
-     * 获取元素等待超时时间
-     */
-    public static int getElementTimeout() {
-        try {
-            return FrameworkConfigManager.getInt(FrameworkConfig.PLAYWRIGHT_PAGE_TIMEOUT);
-        } catch (Exception e) {
-            logger.debug("Failed to get element timeout from config, using default", e);
-            return DEFAULT_ELEMENT_TIMEOUT;
-        }
-    }
+    private static final int DEFAULT_ELEMENT_WAIT_TIMEOUT = 15000; // 元素等待时间（isVisible, exists 等方法）
     
     /**
      * 获取页面加载超时时间
@@ -55,32 +40,33 @@ public class TimeoutConfig {
         }
     }
     
+
     /**
-     * 获取操作超时时间
+     * 获取元素等待时间（用于 isVisible, exists 等方法）
+     * 这些方法会重试检查，直到超时，提高测试稳定性
      */
-    public static int getActionTimeout() {
+    public static int getElementCheckTimeout() {
         try {
-            return FrameworkConfigManager.getInt(FrameworkConfig.PLAYWRIGHT_PAGE_TIMEOUT);
+            return FrameworkConfigManager.getInt(FrameworkConfig.PLAYWRIGHT_ELEMENT_WAIT_TIMEOUT);
         } catch (Exception e) {
-            logger.debug("Failed to get action timeout from config, using default", e);
-            return DEFAULT_ACTION_TIMEOUT;
+            logger.debug("Failed to get element wait timeout from config, using default", e);
+            return DEFAULT_ELEMENT_WAIT_TIMEOUT;
         }
     }
-    
+
     /**
-     * 获取短超时时间
+     * 获取轮询间隔时间（毫秒）
+     * 用于各种等待方法的轮询检查间隔
      */
-    public static int getShortTimeout() {
-        return DEFAULT_SHORT_TIMEOUT;
+    public static int getPollingInterval() {
+        try {
+            return FrameworkConfigManager.getInt(FrameworkConfig.PLAYWRIGHT_POLLING_INTERVAL);
+        } catch (Exception e) {
+            logger.debug("Failed to get polling interval from config, using default", e);
+            return 500;
+        }
     }
-    
-    /**
-     * 获取长超时时间
-     */
-    public static int getLongTimeout() {
-        return DEFAULT_LONG_TIMEOUT;
-    }
-    
+
     /**
      * 获取页面稳定化等待超时时间
      */
@@ -89,10 +75,10 @@ public class TimeoutConfig {
             return FrameworkConfigManager.getInt(FrameworkConfig.PLAYWRIGHT_STABILIZE_WAIT_TIMEOUT);
         } catch (Exception e) {
             logger.debug("Failed to get stabilize timeout from config, using default", e);
-            return 8000;
+            return 15000;
         }
     }
-    
+
     /**
      * 获取截图等待超时时间
      */

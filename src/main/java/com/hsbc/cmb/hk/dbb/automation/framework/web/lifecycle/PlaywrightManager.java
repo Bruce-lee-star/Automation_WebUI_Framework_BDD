@@ -1,5 +1,7 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle;
 
+import com.hsbc.cmb.hk.dbb.automation.framework.web.page.factory.PageObjectFactory;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.TimeoutConfig;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.ColorScheme;
 import com.microsoft.playwright.options.LoadState;
@@ -1106,7 +1108,7 @@ public class PlaywrightManager {
             LoggingConfigUtil.logDebugIfVerbose(logger, "页面稳定化：确保窗口大小正确...");
 
             // 性能优化：快速等待页面DOM加载完成（可配置）
-            int stabilizeWaitTimeout = getStabilizeWaitTimeout();
+            int stabilizeWaitTimeout = TimeoutConfig.getStabilizeTimeout();
             LoadState loadState = getConfiguredLoadState();
             try {
                 page.waitForLoadState(loadState, new Page.WaitForLoadStateOptions().setTimeout(stabilizeWaitTimeout));
@@ -1379,7 +1381,11 @@ public class PlaywrightManager {
         String restartBrowserForEach = getRestartStrategy();
 
         if ("scenario".equalsIgnoreCase(restartBrowserForEach)) {
+            // 清理缓存的PageObject, 避免使用已经关闭的context/page
+            PageObjectFactory.clearAll();
             // Scenario 模式：每个 scenario 都创建新的 Context/Page
+            closePage();
+            closeContext();
             createNewContextAndPage();
             LoggingConfigUtil.logDebugIfVerbose(logger, " Scenario initialization completed (new Context/Page created)");
         } else {
@@ -1390,6 +1396,7 @@ public class PlaywrightManager {
             if (existingContext != null && existingPage != null && !existingPage.isClosed()) {
                 LoggingConfigUtil.logDebugIfVerbose(logger, " Scenario initialization completed (reusing existing Context/Page)");
             } else {
+                PageObjectFactory.clearAll();
                 // 如果不存在或已关闭，则创建新的
                 createNewContextAndPage();
                 LoggingConfigUtil.logDebugIfVerbose(logger, " Scenario initialization completed (new Context/Page created)");
@@ -1538,7 +1545,7 @@ public class PlaywrightManager {
                 Path screenshotPath = screenshotDir.resolve(screenshotName);
 
                 // 性能优化：快速等待页面稳定（可配置）
-                int screenshotWaitTimeout = getScreenshotWaitTimeout();
+                int screenshotWaitTimeout = TimeoutConfig.getScreenshotTimeout();
                 LoadState loadState = getConfiguredLoadState();
                 try {
                     page.waitForLoadState(loadState, new Page.WaitForLoadStateOptions().setTimeout(screenshotWaitTimeout));
@@ -1584,7 +1591,7 @@ public class PlaywrightManager {
                 Path screenshotPath = screenshotDir.resolve(screenshotName);
 
                 // 性能优化：快速等待页面稳定（可配置）
-                int screenshotWaitTimeout = getScreenshotWaitTimeout();
+                int screenshotWaitTimeout = TimeoutConfig.getScreenshotTimeout();
                 LoadState loadState = getConfiguredLoadState();
                 try {
                     page.waitForLoadState(loadState, new Page.WaitForLoadStateOptions().setTimeout(screenshotWaitTimeout));
@@ -1894,16 +1901,20 @@ public class PlaywrightManager {
 
     /**
      * 获取页面稳定化等待超时（毫秒）
+     * @deprecated 使用 {@link com.hsbc.cmb.hk.dbb.automation.framework.web.utils.TimeoutConfig#getStabilizeTimeout()}
      */
+    @Deprecated
     public static int getStabilizeWaitTimeout() {
-        return FrameworkConfigManager.getInt(FrameworkConfig.PLAYWRIGHT_STABILIZE_WAIT_TIMEOUT);
+        return TimeoutConfig.getStabilizeTimeout();
     }
 
     /**
      * 获取截图等待超时（毫秒）
+     * @deprecated 使用 {@link com.hsbc.cmb.hk.dbb.automation.framework.web.utils.TimeoutConfig#getScreenshotTimeout()}
      */
+    @Deprecated
     public static int getScreenshotWaitTimeout() {
-        return FrameworkConfigManager.getInt(FrameworkConfig.PLAYWRIGHT_SCREENSHOT_WAIT_TIMEOUT);
+        return TimeoutConfig.getScreenshotTimeout();
     }
 
     /**

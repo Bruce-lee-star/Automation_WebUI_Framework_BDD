@@ -9,6 +9,7 @@ import com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle.PlaywrightManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.Element;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.PageElement;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.TimeoutConfig;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.AriaRole;
 import com.microsoft.playwright.options.BoundingBox;
@@ -17,6 +18,8 @@ import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.MouseButton;
 import com.microsoft.playwright.options.SelectOption;
 import com.microsoft.playwright.options.WaitForSelectorState;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -511,13 +514,42 @@ public abstract class BasePage {
     // ==================== 判断方法 ====================
 
     /**
-     * 检查元素是否可见
+     * 检查元素是否可见（带隐式等待）
+     * 方法会重试检查直到超时，提高测试稳定性
+     *
+     * @param selector 元素选择器
+     * @return 元素可见返回true，否则返回false
      */
     public boolean isVisible(String selector) {
         try {
-            boolean visible = locator(selector).isVisible();
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is visible: {}", selector, visible);
-            return visible;
+            int timeout = TimeoutConfig.getElementCheckTimeout();
+            int interval = TimeoutConfig.getPollingInterval();
+            long endTime = System.currentTimeMillis() + timeout;
+
+            // 重试检查元素可见性
+            while (System.currentTimeMillis() < endTime) {
+                try {
+                    boolean visible = locator(selector).isVisible();
+                    if (visible) {
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is visible: true (after {}ms)",
+                            selector, timeout - (endTime - System.currentTimeMillis()));
+                        return true;
+                    }
+                } catch (Exception e) {
+                    // 元素可能还没加载，继续重试
+                }
+
+                // 等待下一次检查
+                if (System.currentTimeMillis() < endTime) {
+                    waitForTimeout(interval);
+                }
+            }
+
+            // 超时后最后一次检查
+            boolean finalVisible = locator(selector).isVisible();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is visible: {} (after {}ms timeout)",
+                selector, finalVisible, timeout);
+            return finalVisible;
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is visible: {}", selector, e);
             throw new RuntimeException("Failed to check if element is visible: " + selector, e);
@@ -525,13 +557,42 @@ public abstract class BasePage {
     }
 
     /**
-     * 检查元素是否存在
+     * 检查元素是否存在（带隐式等待）
+     * 方法会重试检查直到超时，提高测试稳定性
+     *
+     * @param selector 元素选择器
+     * @return 元素存在返回true，否则返回false
      */
     public boolean exists(String selector) {
         try {
-            boolean exists = locator(selector).count() > 0;
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} exists: {}", selector, exists);
-            return exists;
+            int timeout = TimeoutConfig.getElementCheckTimeout();
+            int interval = TimeoutConfig.getPollingInterval();
+            long endTime = System.currentTimeMillis() + timeout;
+
+            // 重试检查元素存在性
+            while (System.currentTimeMillis() < endTime) {
+                try {
+                    boolean exists = locator(selector).count() > 0;
+                    if (exists) {
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} exists: true (after {}ms)",
+                            selector, timeout - (endTime - System.currentTimeMillis()));
+                        return true;
+                    }
+                } catch (Exception e) {
+                    // 元素可能还没加载，继续重试
+                }
+
+                // 等待下一次检查
+                if (System.currentTimeMillis() < endTime) {
+                    waitForTimeout(interval);
+                }
+            }
+
+            // 超时后最后一次检查
+            boolean finalExists = locator(selector).count() > 0;
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} exists: {} (after {}ms timeout)",
+                selector, finalExists, timeout);
+            return finalExists;
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element exists: {}", selector, e);
             throw new RuntimeException("Failed to check if element exists: " + selector, e);
@@ -539,13 +600,39 @@ public abstract class BasePage {
     }
 
     /**
-     * 检查元素是否被选中
+     * 检查元素是否被选中（带隐式等待）
+     * 方法会重试检查直到超时，提高测试稳定性
+     *
+     * @param selector 元素选择器
+     * @return 元素被选中返回true，否则返回false
      */
     public boolean isChecked(String selector) {
         try {
-            boolean checked = locator(selector).isChecked();
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is checked: {}", selector, checked);
-            return checked;
+            int timeout = TimeoutConfig.getElementCheckTimeout();
+            int interval = TimeoutConfig.getPollingInterval();
+            long endTime = System.currentTimeMillis() + timeout;
+
+            // 重试检查元素选中状态
+            while (System.currentTimeMillis() < endTime) {
+                try {
+                    boolean checked = locator(selector).isChecked();
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is checked: {}", selector, checked);
+                    return checked;
+                } catch (Exception e) {
+                    // 元素可能还没加载，继续重试
+                }
+
+                // 等待下一次检查
+                if (System.currentTimeMillis() < endTime) {
+                    waitForTimeout(interval);
+                }
+            }
+
+            // 超时后最后一次检查
+            boolean finalChecked = locator(selector).isChecked();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is checked: {} (after {}ms timeout)",
+                selector, finalChecked, timeout);
+            return finalChecked;
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is checked: {}", selector, e);
             throw new RuntimeException("Failed to check if element is checked: " + selector, e);
@@ -553,13 +640,39 @@ public abstract class BasePage {
     }
 
     /**
-     * 检查元素是否启用
+     * 检查元素是否启用（带隐式等待）
+     * 方法会重试检查直到超时，提高测试稳定性
+     *
+     * @param selector 元素选择器
+     * @return 元素启用返回true，否则返回false
      */
     public boolean isEnabled(String selector) {
         try {
-            boolean enabled = locator(selector).isEnabled();
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is enabled: {}", selector, enabled);
-            return enabled;
+            int timeout = TimeoutConfig.getElementCheckTimeout();
+            int interval = TimeoutConfig.getPollingInterval();
+            long endTime = System.currentTimeMillis() + timeout;
+
+            // 重试检查元素启用状态
+            while (System.currentTimeMillis() < endTime) {
+                try {
+                    boolean enabled = locator(selector).isEnabled();
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is enabled: {}", selector, enabled);
+                    return enabled;
+                } catch (Exception e) {
+                    // 元素可能还没加载，继续重试
+                }
+
+                // 等待下一次检查
+                if (System.currentTimeMillis() < endTime) {
+                    waitForTimeout(interval);
+                }
+            }
+
+            // 超时后最后一次检查
+            boolean finalEnabled = locator(selector).isEnabled();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is enabled: {} (after {}ms timeout)",
+                selector, finalEnabled, timeout);
+            return finalEnabled;
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is enabled: {}", selector, e);
             throw new RuntimeException("Failed to check if element is enabled: " + selector, e);
@@ -567,13 +680,39 @@ public abstract class BasePage {
     }
 
     /**
-     * 检查元素是否禁用
+     * 检查元素是否禁用（带隐式等待）
+     * 方法会重试检查直到超时，提高测试稳定性
+     *
+     * @param selector 元素选择器
+     * @return 元素禁用返回true，否则返回false
      */
     public boolean isDisabled(String selector) {
         try {
-            boolean disabled = locator(selector).isDisabled();
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is disabled: {}", selector, disabled);
-            return disabled;
+            int timeout = TimeoutConfig.getElementCheckTimeout();
+            int interval = TimeoutConfig.getPollingInterval();
+            long endTime = System.currentTimeMillis() + timeout;
+
+            // 重试检查元素禁用状态
+            while (System.currentTimeMillis() < endTime) {
+                try {
+                    boolean disabled = locator(selector).isDisabled();
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is disabled: {}", selector, disabled);
+                    return disabled;
+                } catch (Exception e) {
+                    // 元素可能还没加载，继续重试
+                }
+
+                // 等待下一次检查
+                if (System.currentTimeMillis() < endTime) {
+                    waitForTimeout(interval);
+                }
+            }
+
+            // 超时后最后一次检查
+            boolean finalDisabled = locator(selector).isDisabled();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is disabled: {} (after {}ms timeout)",
+                selector, finalDisabled, timeout);
+            return finalDisabled;
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is disabled: {}", selector, e);
             throw new RuntimeException("Failed to check if element is disabled: " + selector, e);
@@ -810,7 +949,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Title contains expected text: '{}'", expectedTitle);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
 
             LoggingConfigUtil.logWarnIfVerbose(logger, "Timeout waiting for title to contain: {}", expectedTitle);
@@ -842,7 +981,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "URL contains expected fragment: '{}'", expectedUrlFragment);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
 
             LoggingConfigUtil.logWarnIfVerbose(logger, "Timeout waiting for URL to contain: {}", expectedUrlFragment);
@@ -869,14 +1008,14 @@ public abstract class BasePage {
             LoggingConfigUtil.logInfoIfVerbose(logger, "Performing '{}' within {}s", actionDescription, timeoutSeconds);
             long startTime = System.currentTimeMillis();
             long endTime = startTime + timeoutMillis;
-            
+
             while (System.currentTimeMillis() < endTime) {
                 action.run();
                 if (validation.get()) {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Action '{}' completed successfully", actionDescription);
                     return true;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
 
             LoggingConfigUtil.logWarnIfVerbose(logger, "Timeout performing action: {}", actionDescription);
@@ -965,7 +1104,7 @@ public abstract class BasePage {
     // ==================== 验证方法 ====================
 
     /**
-     * 验证元素文本是否包含指定文本
+     * 验证元素文本是否包含指定文本（非断言，返回boolean）
      */
     public boolean textContains(String selector, String expectedText) {
         try {
@@ -980,7 +1119,24 @@ public abstract class BasePage {
     }
 
     /**
-     * 验证元素文本是否等于指定文本
+     * 断言元素文本包含指定文本（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @param expectedText 期望的文本
+     * @throws AssertionError 如果元素文本不包含期望文本
+     */
+    public void assertTextContains(String selector, String expectedText) {
+        String actualText = getText(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' contains text: '{}'", selector, expectedText);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' text should contain '" + expectedText + "'",
+            actualText,
+            Matchers.containsString(expectedText)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' contains '{}'", selector, expectedText);
+    }
+
+    /**
+     * 验证元素文本是否等于指定文本（非断言，返回boolean）
      */
     public boolean textEquals(String selector, String expectedText) {
         try {
@@ -995,7 +1151,24 @@ public abstract class BasePage {
     }
 
     /**
-     * 验证元素文本是否匹配正则表达式
+     * 断言元素文本等于指定文本（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @param expectedText 期望的文本
+     * @throws AssertionError 如果元素文本不等于期望文本
+     */
+    public void assertTextEquals(String selector, String expectedText) {
+        String actualText = getText(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' equals text: '{}'", selector, expectedText);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' text should equal '" + expectedText + "'",
+            actualText,
+            Matchers.equalTo(expectedText)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' equals '{}'", selector, expectedText);
+    }
+
+    /**
+     * 验证元素文本是否匹配正则表达式（非断言，返回boolean）
      */
     public boolean textMatches(String selector, String regex) {
         try {
@@ -1007,6 +1180,231 @@ public abstract class BasePage {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify text matches for element: {}", selector, e);
             throw new RuntimeException("Failed to verify text matches for element: " + selector, e);
         }
+    }
+
+    /**
+     * 断言元素文本匹配正则表达式（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @param regex 正则表达式
+     * @throws AssertionError 如果元素文本不匹配正则表达式
+     */
+    public void assertTextMatches(String selector, String regex) {
+        String actualText = getText(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' matches regex: '{}'", selector, regex);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' text should match pattern '" + regex + "'",
+            actualText,
+            Matchers.matchesPattern(regex)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' matches regex '{}'", selector, regex);
+    }
+
+    /**
+     * 断言元素可见（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素不可见
+     */
+    public void assertVisible(String selector) {
+        boolean visible = isVisible(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is visible", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should be visible",
+            visible,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is visible", selector);
+    }
+
+    /**
+     * 断言元素不可见（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素可见
+     */
+    public void assertNotVisible(String selector) {
+        boolean visible = isVisible(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is not visible", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should not be visible",
+            visible,
+            Matchers.is(false)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is not visible", selector);
+    }
+
+    /**
+     * 断言元素存在（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素不存在
+     */
+    public void assertExists(String selector) {
+        boolean exists = exists(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' exists", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should exist",
+            exists,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' exists", selector);
+    }
+
+    /**
+     * 断言元素不存在（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素存在
+     */
+    public void assertNotExists(String selector) {
+        boolean exists = exists(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' does not exist", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should not exist",
+            exists,
+            Matchers.is(false)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' does not exist", selector);
+    }
+
+    /**
+     * 断言元素被选中（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素未被选中
+     */
+    public void assertChecked(String selector) {
+        boolean checked = isChecked(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is checked", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should be checked",
+            checked,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is checked", selector);
+    }
+
+    /**
+     * 断言元素未被选中（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素被选中
+     */
+    public void assertNotChecked(String selector) {
+        boolean checked = isChecked(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is not checked", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should not be checked",
+            checked,
+            Matchers.is(false)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is not checked", selector);
+    }
+
+    /**
+     * 断言元素启用（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素未启用
+     */
+    public void assertEnabled(String selector) {
+        boolean enabled = isEnabled(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is enabled", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should be enabled",
+            enabled,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is enabled", selector);
+    }
+
+    /**
+     * 断言元素禁用（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素未被禁用
+     */
+    public void assertDisabled(String selector) {
+        boolean disabled = isDisabled(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is disabled", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should be disabled",
+            disabled,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is disabled", selector);
+    }
+
+    /**
+     * 断言元素可点击（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素不可点击
+     */
+    public void assertClickable(String selector) {
+        boolean clickable = isElementClickable(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is clickable", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should be clickable",
+            clickable,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is clickable", selector);
+    }
+
+    /**
+     * 断言页面包含指定文本（使用 Hamcrest 断言）
+     * @param text 期望的文本
+     * @throws AssertionError 如果页面不包含指定文本
+     */
+    public void assertPageContainsText(String text) {
+        String pageContent = page.content();
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting page contains text: '{}'", text);
+        MatcherAssert.assertThat(
+            "Page should contain text '" + text + "'",
+            pageContent,
+            Matchers.containsString(text)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Page contains text '{}'", text);
+    }
+
+    /**
+     * 断言页面源代码包含指定文本（使用 Hamcrest 断言）
+     * @param text 期望的文本
+     * @throws AssertionError 如果页面源代码不包含指定文本
+     */
+    public void assertPageSourceContains(String text) {
+        String pageSource = getPageSource();
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting page source contains text: '{}'", text);
+        MatcherAssert.assertThat(
+            "Page source should contain text '" + text + "'",
+            pageSource,
+            Matchers.containsString(text)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Page source contains text '{}'", text);
+    }
+
+    /**
+     * 断言元素可访问（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素不可访问
+     */
+    public void assertAccessible(String selector) {
+        boolean accessible = isAccessible(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is accessible", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should be accessible",
+            accessible,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is accessible", selector);
+    }
+
+    /**
+     * 断言元素有 ARIA 标签（使用 Hamcrest 断言）
+     * @param selector 元素选择器
+     * @throws AssertionError 如果元素没有 ARIA 标签
+     */
+    public void assertHasAriaLabel(String selector) {
+        boolean hasLabel = hasAriaLabel(selector);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' has aria-label", selector);
+        MatcherAssert.assertThat(
+            "Element '" + selector + "' should have aria-label",
+            hasLabel,
+            Matchers.is(true)
+        );
+        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' has aria-label", selector);
     }
 
     // ==================== 表单操作方法 ====================
@@ -1274,7 +1672,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "New page opened: {}", newPage.url());
                     return newPage;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
 
             throw new RuntimeException("Timeout waiting for new page to open");
@@ -1294,17 +1692,17 @@ public abstract class BasePage {
             int timeoutMillis = timeoutSeconds * 1000;
             LoggingConfigUtil.logInfoIfVerbose(logger, "Waiting for title to contain: '{}' with timeout: {}s", expectedTitle, timeoutSeconds);
             ensurePageValid();
-            
+
             long startTime = System.currentTimeMillis();
             long endTime = startTime + timeoutMillis;
-            
+
             while (System.currentTimeMillis() < endTime) {
                 String currentTitle = page.title();
                 if (currentTitle.contains(expectedTitle)) {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Title contains expected text: '{}'", expectedTitle);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
 
             throw new RuntimeException("Timeout waiting for title to contain: " + expectedTitle);
@@ -1334,7 +1732,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "URL contains expected fragment: '{}'", expectedUrlFragment);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
 
             throw new RuntimeException("Timeout waiting for URL to contain: " + expectedUrlFragment);
@@ -1405,11 +1803,44 @@ public abstract class BasePage {
      * @param selector 元素选择器
      * @return 如果元素可点击则返回true，否则返回false
      */
+    /**
+     * 检查元素是否可点击（带隐式等待）
+     * 元素可点击需要同时满足：可见且启用
+     * 方法会重试检查直到超时，提高测试稳定性
+     *
+     * @param selector 元素选择器
+     * @return 元素可点击返回true，否则返回false
+     */
     public boolean isElementClickable(String selector) {
         try {
-            boolean clickable = locator(selector).isVisible() && locator(selector).isEnabled();
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is clickable: {}", selector, clickable);
-            return clickable;
+            int timeout = TimeoutConfig.getElementCheckTimeout();
+            int interval = TimeoutConfig.getPollingInterval();
+            long endTime = System.currentTimeMillis() + timeout;
+
+            // 重试检查元素可点击状态
+            while (System.currentTimeMillis() < endTime) {
+                try {
+                    boolean clickable = locator(selector).isVisible() && locator(selector).isEnabled();
+                    if (clickable) {
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is clickable: true (after {}ms)",
+                            selector, timeout - (endTime - System.currentTimeMillis()));
+                        return true;
+                    }
+                } catch (Exception e) {
+                    // 元素可能还没加载，继续重试
+                }
+
+                // 等待下一次检查
+                if (System.currentTimeMillis() < endTime) {
+                    waitForTimeout(interval);
+                }
+            }
+
+            // 超时后最后一次检查
+            boolean finalClickable = locator(selector).isVisible() && locator(selector).isEnabled();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is clickable: {} (after {}ms timeout)",
+                selector, finalClickable, timeout);
+            return finalClickable;
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is clickable: {}", selector, e);
             throw new RuntimeException("Failed to check if element is clickable: " + selector, e);
@@ -1495,14 +1926,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logErrorIfVerbose(logger, "Operation '{}' failed after {} attempts: {}", operationDescription, maxRetries + 1, e.getMessage());
                     throw new TimeoutException("Operation '" + operationDescription + "' failed after " + (maxRetries + 1) + " attempts", e);
                 }
-                LoggingConfigUtil.logWarnIfVerbose(logger, "Operation '{}' failed on attempt {}/{}, retrying in {}ms. Error: {}", 
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Operation '{}' failed on attempt {}/{}, retrying in {}ms. Error: {}",
                     operationDescription, attempt, maxRetries + 1, retryIntervalMs, e.getMessage());
-                try {
-                    Thread.sleep(retryIntervalMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException("Retry interrupted", ie);
-                }
+                waitForTimeout(retryIntervalMs);
             }
         }
     }
@@ -1550,14 +1976,9 @@ public abstract class BasePage {
                 throw new TimeoutException("Operation '" + operationDescription + "' failed validation after " + (maxRetries + 1) + " attempts");
             }
             
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Retrying operation '{}' in {}ms (attempt {}/{})", 
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Retrying operation '{}' in {}ms (attempt {}/{})",
                 operationDescription, retryIntervalMs, attempt + 1, maxRetries + 1);
-            try {
-                Thread.sleep(retryIntervalMs);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Retry interrupted", ie);
-            }
+            waitForTimeout(retryIntervalMs);
         }
         return false;
     }
@@ -1619,7 +2040,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now editable: {}", selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
             
             throw new TimeoutException("Element not editable within timeout: " + selector);
@@ -1646,9 +2067,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now disabled: {}", selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
-            
+
             throw new TimeoutException("Element not disabled within timeout: " + selector);
         } catch (TimeoutException e) {
             throw e;
@@ -1673,7 +2094,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now enabled: {}", selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
             
             throw new TimeoutException("Element not enabled within timeout: " + selector);
@@ -1704,9 +2125,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element attribute '{}' now equals '{}': {}", attributeName, expectedAttributeValue, selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
-            
+
             throw new TimeoutException("Element attribute '" + attributeName + "' did not equal '" + expectedAttributeValue + "' within timeout");
         } catch (TimeoutException e) {
             throw e;
@@ -1735,7 +2156,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element attribute '{}' now contains '{}': {}", attributeName, expectedAttributeValue, selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
             
             throw new TimeoutException("Element attribute '" + attributeName + "' did not contain '" + expectedAttributeValue + "' within timeout");
@@ -1764,9 +2185,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element text now contains '{}': {}", expectedText, selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
-            
+
             throw new TimeoutException("Element text did not contain '" + expectedText + "' within timeout");
         } catch (TimeoutException e) {
             throw e;
@@ -1793,7 +2214,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element text now equals '{}': {}", expectedText, selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
             
             throw new TimeoutException("Element text did not equal '" + expectedText + "' within timeout");
@@ -1822,9 +2243,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element count now equals {}: {}", expectedCount, selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
-            
+
             int actualCount = getElementCount(selector);
             throw new TimeoutException("Element count did not equal " + expectedCount + " within timeout. Actual: " + actualCount);
         } catch (TimeoutException e) {
@@ -1852,7 +2273,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element count now at least {}: {} (actual: {})", minimumCount, selector, actualCount);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
             
             int actualCount = getElementCount(selector);
@@ -1931,9 +2352,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now checked: {}", selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
-            
+
             throw new TimeoutException("Element not checked within timeout: " + selector);
         } catch (TimeoutException e) {
             throw e;
@@ -1958,7 +2379,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Element is now not checked: {}", selector);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
             
             throw new TimeoutException("Element still checked within timeout: " + selector);
@@ -1986,9 +2407,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "URL now equals '{}': {}", expectedUrl, currentUrl);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
-            
+
             throw new TimeoutException("URL does not equal '" + expectedUrl + "' within timeout");
         } catch (TimeoutException e) {
             throw e;
@@ -2014,7 +2435,7 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "URL now starts with '{}': {}", expectedPrefix, currentUrl);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
             
             throw new TimeoutException("URL does not start with '" + expectedPrefix + "' within timeout");
@@ -2042,9 +2463,9 @@ public abstract class BasePage {
                     LoggingConfigUtil.logInfoIfVerbose(logger, "Custom condition '{}' is now true", conditionDescription);
                     return;
                 }
-                waitForTimeout(500);
+                waitForTimeout(TimeoutConfig.getPollingInterval());
             }
-            
+
             throw new TimeoutException("Custom condition '" + conditionDescription + "' did not become true within timeout");
         } catch (TimeoutException e) {
             throw e;

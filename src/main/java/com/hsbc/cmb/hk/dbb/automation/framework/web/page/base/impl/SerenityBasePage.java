@@ -1,6 +1,7 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.page.base.impl;
 
 import com.microsoft.playwright.Page;
+import com.microsoft.playwright.BrowserContext;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
 
 import com.hsbc.cmb.hk.dbb.automation.framework.web.exceptions.ConfigurationException;
@@ -63,6 +64,24 @@ public abstract class SerenityBasePage extends BasePage {
         } catch (Exception e) {
             logger.error("Failed to get page", e);
             throw new ConfigurationException("Failed to get page", e);
+        }
+    }
+
+    /**
+     * 获取BrowserContext对象
+     * 覆盖父类方法，公开访问权限并添加Serenity集成
+     */
+    public BrowserContext getContext() {
+        try {
+            BrowserContext context = super.getContext();
+            if (context != null) {
+                addSerenityTestData("contextRetrieved", true);
+                LoggingConfigUtil.logDebugIfVerbose(logger, "BrowserContext retrieved successfully");
+            }
+            return context;
+        } catch (Exception e) {
+            logger.error("Failed to get browser context", e);
+            throw new ConfigurationException("Failed to get browser context", e);
         }
     }
     
@@ -588,5 +607,151 @@ public abstract class SerenityBasePage extends BasePage {
     public void scrollToElementCenter(String targetSelector) {
         super.scrollToElementCenter(targetSelector);
         addSerenityTestData("scrollToElementCenter", targetSelector);
+    }
+
+    // ==================== 断言方法（Serenity集成版）====================
+
+    /**
+     * 断言元素文本包含指定文本
+     */
+    @Override
+    public void assertTextContains(String selector, String expectedText) {
+        super.assertTextContains(selector, expectedText);
+        recordPageVerification("assertTextContains_" + selector, true);
+    }
+
+    /**
+     * 断言元素文本等于指定文本
+     */
+    @Override
+    public void assertTextEquals(String selector, String expectedText) {
+        super.assertTextEquals(selector, expectedText);
+        recordPageVerification("assertTextEquals_" + selector, true);
+    }
+
+    /**
+     * 断言元素文本匹配正则表达式
+     */
+    @Override
+    public void assertTextMatches(String selector, String regex) {
+        super.assertTextMatches(selector, regex);
+        recordPageVerification("assertTextMatches_" + selector, true);
+    }
+
+    /**
+     * 断言元素可见
+     */
+    @Override
+    public void assertVisible(String selector) {
+        super.assertVisible(selector);
+        recordPageVerification("assertVisible_" + selector, true);
+    }
+
+    /**
+     * 断言元素不可见
+     */
+    @Override
+    public void assertNotVisible(String selector) {
+        super.assertNotVisible(selector);
+        recordPageVerification("assertNotVisible_" + selector, true);
+    }
+
+    /**
+     * 断言元素存在
+     */
+    @Override
+    public void assertExists(String selector) {
+        super.assertExists(selector);
+        recordPageVerification("assertExists_" + selector, true);
+    }
+
+    /**
+     * 断言元素不存在
+     */
+    @Override
+    public void assertNotExists(String selector) {
+        super.assertNotExists(selector);
+        recordPageVerification("assertNotExists_" + selector, true);
+    }
+
+    /**
+     * 断言元素被选中
+     */
+    @Override
+    public void assertChecked(String selector) {
+        super.assertChecked(selector);
+        recordPageVerification("assertChecked_" + selector, true);
+    }
+
+    /**
+     * 断言元素未被选中
+     */
+    @Override
+    public void assertNotChecked(String selector) {
+        super.assertNotChecked(selector);
+        recordPageVerification("assertNotChecked_" + selector, true);
+    }
+
+    /**
+     * 断言元素启用
+     */
+    @Override
+    public void assertEnabled(String selector) {
+        super.assertEnabled(selector);
+        recordPageVerification("assertEnabled_" + selector, true);
+    }
+
+    /**
+     * 断言元素禁用
+     */
+    @Override
+    public void assertDisabled(String selector) {
+        super.assertDisabled(selector);
+        recordPageVerification("assertDisabled_" + selector, true);
+    }
+
+    /**
+     * 断言元素可点击
+     */
+    @Override
+    public void assertClickable(String selector) {
+        super.assertClickable(selector);
+        recordPageVerification("assertClickable_" + selector, true);
+    }
+
+    /**
+     * 断言页面包含指定文本
+     */
+    @Override
+    public void assertPageContainsText(String text) {
+        super.assertPageContainsText(text);
+        recordPageVerification("assertPageContainsText_" + text, true);
+    }
+
+    /**
+     * 断言页面源代码包含指定文本
+     */
+    @Override
+    public void assertPageSourceContains(String text) {
+        super.assertPageSourceContains(text);
+        recordPageVerification("assertPageSourceContains_" + text, true);
+    }
+
+    /**
+     * 断言元素可访问
+     */
+    @Override
+    public void assertAccessible(String selector) {
+        super.assertAccessible(selector);
+        recordPageVerification("assertAccessible_" + selector, true);
+    }
+
+    /**
+     * 断言元素有 ARIA 标签
+     */
+    @Override
+    public void assertHasAriaLabel(String selector) {
+        super.assertHasAriaLabel(selector);
+        recordPageVerification("assertHasAriaLabel_" + selector, true);
     }
 }

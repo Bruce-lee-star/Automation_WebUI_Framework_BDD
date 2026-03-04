@@ -358,7 +358,7 @@ public enum FrameworkConfig {
      */
     PLAYWRIGHT_STABILIZE_WAIT_TIMEOUT(
         "playwright.stabilize.wait.timeout",
-        "8000",
+        "15000",
         "页面稳定化等待超时"
     ),
 
@@ -387,7 +387,6 @@ public enum FrameworkConfig {
         "true",
         "全页截图配置"
     ),
-
 
     /**
      * 截图等待超时（毫秒）
@@ -606,7 +605,26 @@ public enum FrameworkConfig {
     PLAYWRIGHT_NO_LOGIN_SESSION_TIMEOUT(
         "playwright.no.login.session.timeout.minutes",
         "5",
-        "No login session timeout (minutes)");
+        "No login session timeout (minutes)"),
+
+    /**
+     * 元素等待时间（毫秒）
+     * 用于 isVisible, exists, isChecked, isEnabled, isDisabled, isElementClickable 等立即执行方法的重试超时
+     * 这些方法会重试检查，直到超时，提高测试稳定性
+     */
+    PLAYWRIGHT_ELEMENT_WAIT_TIMEOUT(
+        "playwright.element.wait.timeout",
+        "15000",
+        "元素等待时间（毫秒）"),
+
+    /**
+     * 轮询间隔时间（毫秒）
+     * 用于各种等待方法的轮询检查间隔
+     */
+    PLAYWRIGHT_POLLING_INTERVAL(
+        "playwright.polling.interval",
+        "500",
+        "轮询间隔（毫秒）");
 
     private final String key;
     private final String defaultValue;
