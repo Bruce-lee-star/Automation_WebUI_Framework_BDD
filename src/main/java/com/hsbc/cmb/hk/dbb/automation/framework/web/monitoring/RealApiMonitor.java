@@ -1994,7 +1994,7 @@ public class RealApiMonitor {
         /**
          * 检测到指定API后停止监控（企业级功能）
          *
-         * @param urlPattern URL匹配模式（支持普通URL或正则表达式）
+         * @param endpoint URL匹配模式（支持普通URL或正则表达式）
          * @param expectedCount 期望检测到的API调用次数
          * @return this构建器实例
          *
@@ -2019,7 +2019,7 @@ public class RealApiMonitor {
          * 2. 如果在指定秒数内没有检测到目标API，记录警告信息
          * 3. 如果 timeoutSeconds 为 0，则不设置超时，只检测API
          *
-         * @param urlPattern URL匹配模式（支持普通URL或正则）
+         * @param endpoint URL匹配模式（支持普通URL或正则）
          * @param expectedCount 期望检测到的API调用次数
          * @param timeoutSeconds 超时秒数（0表示不设置超时）
          * @return this构建器实例

@@ -1,12 +1,10 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
-import com.jayway.jsonpath.JsonPath;
-import com.jayway.jsonpath.PathNotFoundException;
-import com.microsoft.playwright.*;
+import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Request;
+import com.microsoft.playwright.Route;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import net.serenitybdd.core.Serenity;
@@ -41,19 +39,6 @@ import java.util.stream.Collectors;
  *       .withResponse("{\"status\":\"success\"}")
  *       .build();
  *
- * 【推荐】Builder模式 - 修改请求：
- *   ApiMonitorAndMockManager.mock(context)
- *       .forUrl("https://api.example.com")  // Host URL（可选）
- *       .forEndpoint("/api/users")            // Endpoint
- *       .withInterceptor((route, request) -> {
- *           // 只修改匹配的请求，无需额外判断
- *           return new Route.ResumeOptions()
- *               .setMethod("POST")
- *               .setPostData("{\"modified\":true}")
- *               .setHeaders(Map.of("X-Custom", "value"));
- *       })
- *       .build();
- *
  * 说明：
  * - 使用 forUrl() 可指定 Host URL（可选，用于精确匹配特定域名）
  * - 使用 forEndpoint() 可指定 API endpoint（必需）
@@ -74,25 +59,6 @@ public class ApiMonitorAndMockManager {
     private static Page currentPage;
     private static BrowserContext currentContext;
 
-    // 统一的请求修改规则列表（避免多个 ".*" 路由冲突）
-    private static final List<RequestModificationRule> requestModificationRules = new CopyOnWriteArrayList<>();
-    private static final List<RequestModificationRule> pageRequestModificationRules = new CopyOnWriteArrayList<>();
-    private static boolean unifiedRouteHandlerRegistered = false;
-    private static boolean unifiedPageRouteHandlerRegistered = false;
-
-    /**
-     * 请求修改规则
-     */
-    private static class RequestModificationRule {
-        final String endpoint;
-        final RequestInterceptor interceptor;
-
-        RequestModificationRule(String endpoint, RequestInterceptor interceptor) {
-            this.endpoint = endpoint;
-            this.interceptor = interceptor;
-        }
-    }
-    
     /**
      * API调用记录
      */
@@ -154,7 +120,6 @@ public class ApiMonitorAndMockManager {
         private Map<String, String> headers;
         private long delayMs; // 模拟延迟
         private boolean enabled;
-        private RequestInterceptor requestInterceptor; // 请求拦截器（新版）
         private ResponseGenerator responseGenerator; // 响应生成器
 
         public MockRule(String name, String urlPattern) {
@@ -203,11 +168,6 @@ public class ApiMonitorAndMockManager {
             return this;
         }
 
-        public MockRule requestInterceptor(RequestInterceptor requestInterceptor) {
-            this.requestInterceptor = requestInterceptor;
-            return this;
-        }
-
         public MockRule responseGenerator(ResponseGenerator responseGenerator) {
             this.responseGenerator = responseGenerator;
             return this;
@@ -241,23 +201,7 @@ public class ApiMonitorAndMockManager {
         public Map<String, String> getHeaders() { return headers; }
         public long getDelayMs() { return delayMs; }
         public boolean isEnabled() { return enabled; }
-        public RequestInterceptor getRequestInterceptor() { return requestInterceptor; }
         public ResponseGenerator getResponseGenerator() { return responseGenerator; }
-    }
-
-
-    /**
-     * 请求拦截器接口（新版，支持全面的请求修改）
-     */
-    @FunctionalInterface
-    public interface RequestInterceptor {
-        /**
-         * 拦截并修改请求
-         * @param route 路由对象
-         * @param request 原始请求对象
-         * @return 修改后的继续选项，如果返回null则继续原始请求
-         */
-        Route.ResumeOptions intercept(Route route, Request request);
     }
 
     /**
@@ -318,7 +262,7 @@ public class ApiMonitorAndMockManager {
      * mockDirectResponse(page, ".*api/products.*", 201, "{\"status\":\"created\"}");
      */
     public static void mockDirectResponse(Page page, String urlPattern, int statusCode, String responseData) {
-        String pattern = toRegexPattern(urlPattern);
+        String pattern = toGlobPattern(urlPattern);
         logger.info("========== Mocking API: {} (Status: {}) ==========", pattern, statusCode);
         logger.info("Original URL pattern: '{}' -> Converted to: '{}'", urlPattern, pattern);
 
@@ -345,7 +289,7 @@ public class ApiMonitorAndMockManager {
      * mockDirectResponse(context, "/api/users", 200, "{\"status\":\"success\"}");
      */
     public static void mockDirectResponse(BrowserContext context, String urlPattern, int statusCode, String responseData) {
-        String pattern = toRegexPattern(urlPattern);
+        String pattern = toGlobPattern(urlPattern);
         logger.info("========== Mocking API: {} (Status: {}) ==========", pattern, statusCode);
 
         MockRule rule = new MockRule("mock-" + pattern, pattern)
@@ -429,7 +373,7 @@ public class ApiMonitorAndMockManager {
      * mockTimeout(page, "/api/users", 3000, "{\"status\":\"timeout\"}");
      */
     public static void mockTimeout(Page page, String urlPattern, long timeoutMs, String responseData) {
-        String pattern = toRegexPattern(urlPattern);
+        String pattern = toGlobPattern(urlPattern);
         logger.info("========== Mocking API with timeout: {} (Timeout: {}ms) ==========", pattern, timeoutMs);
 
         MockRule rule = new MockRule("mock-timeout-" + pattern, pattern)
@@ -455,7 +399,7 @@ public class ApiMonitorAndMockManager {
      * mockTimeout(context, "/api/users", 3000, "{\"status\":\"timeout\"}");
      */
     public static void mockTimeout(BrowserContext context, String urlPattern, long timeoutMs, String responseData) {
-        String pattern = toRegexPattern(urlPattern);
+        String pattern = toGlobPattern(urlPattern);
         logger.info("========== Mocking API with timeout: {} (Timeout: {}ms) ==========", pattern, timeoutMs);
 
         MockRule rule = new MockRule("mock-timeout-" + pattern, pattern)
@@ -469,1197 +413,28 @@ public class ApiMonitorAndMockManager {
         logger.info(" Mock API with timeout configured successfully!");
     }
 
-    // ==================== 针对特定API的弱网模拟 ====================
-    // 注意：以下方法已废弃，请使用Builder模式，API更清晰、更强大
-
-    // ==================== 捕获后Mock - 基于真实响应修改字段 ====================
-    // 适用场景：【场景2】需要基于真实API响应修改特定字段
-    // 优势：保留真实API的其他字段，只修改需要的字段
-    // 流程：监控 → 捕获真实响应 → 修改字段 → Mock → 刷新页面
-    //
-    // 【对比】如果已有完整Mock数据，请使用 mockDirectResponse() 或 mockDirectSuccess()，更简单
-    // - mockDirectResponse(): 直接提供完整响应，不需要监控
-    // - captureAndMockField(): 监控真实API，修改特定字段
+    // ==================== URL工具方法 ====================
 
     /**
-     * 【捕获后Mock】先监控获取真实响应，修改字段，然后Mock，最后刷新页面
-     * 这种方法避免了Playwright route handler的单线程限制
-     * 适用于【场景2】需要基于真实API响应修改特定字段
+     * 将普通URL模式转换为 glob 模式
+     * 用于 Playwright 的 route() 方法
      *
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
-     * @param fieldName 要修改的字段名
-     * @param fieldValue 字段值
-     * @param mockStatusCode Mock的状态码（建议使用API实际返回的状态码）
-     * @param waitSeconds 等待API响应的超时时间（秒）
-     *
-     * 示例：
-     * // 监控lastLoginTime API，获取响应，修改lastLoginTime为2025年的时间戳，mock该API，刷新页面
-     * captureAndMockField(page, "/rest/lastLoginTime", "lastLoginTime", 1735689600000L, 200, 30);
-     *
-     * 【对比】如果已有完整Mock数据，建议使用：
-     * mockDirectSuccess(page, "/rest/lastLoginTime", "{\"lastLoginTime\":1735689600000}");
+     * @param urlPattern URL模式（如 /api/users, api/users, users）
+     * @return glob 模式
      */
-    public static void captureAndMockField(Page page, String urlPattern, String fieldName, Object fieldValue, int mockStatusCode, int waitSeconds) {
-        captureAndMockFields(page, urlPattern, Map.of(fieldName, fieldValue), mockStatusCode, waitSeconds);
-    }
-
-    /**
-     * 【捕获后Mock】自动使用原始API状态码的版本
-     * 监控获取真实响应，自动使用原始API的状态码，修改字段，然后Mock
-     *
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
-     * @param fieldName 要修改的字段名
-     * @param fieldValue 字段值
-     * @param waitSeconds 等待API响应的超时时间（秒）
-     *
-     * 示例：
-     * // 自动使用原始API的状态码
-     * captureAndMockFieldWithOriginalStatus(page, "/rest/lastLoginTime", "lastLoginTime", 1735689600000L, 30);
-     */
-    public static void captureAndMockFieldWithOriginalStatus(Page page, String urlPattern, String fieldName, Object fieldValue, int waitSeconds) {
-        captureAndMockFieldsWithOriginalStatus(page, urlPattern, Map.of(fieldName, fieldValue), waitSeconds);
-    }
-
-    /**
-     * 【捕获后Mock】先监控获取真实响应，修改字段，然后Mock，最后刷新页面 - Context版本
-     *
-     * @param context Playwright BrowserContext对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
-     * @param fieldName 要修改的字段名
-     * @param fieldValue 字段值
-     * @param mockStatusCode Mock的状态码（建议使用API实际返回的状态码）
-     * @param waitSeconds 等待API响应的超时时间（秒）
-     */
-    public static void captureAndMockField(BrowserContext context, String urlPattern, String fieldName, Object fieldValue, int mockStatusCode, int waitSeconds) {
-        captureAndMockFields(context, urlPattern, Map.of(fieldName, fieldValue), mockStatusCode, waitSeconds);
-    }
-
-    /**
-     * 【捕获后Mock】自动使用原始API状态码的版本 - Context版本
-     *
-     * @param context Playwright BrowserContext对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
-     * @param fieldName 要修改的字段名
-     * @param fieldValue 字段值
-     * @param waitSeconds 等待API响应的超时时间（秒）
-     */
-    public static void captureAndMockFieldWithOriginalStatus(BrowserContext context, String urlPattern, String fieldName, Object fieldValue, int waitSeconds) {
-        captureAndMockFieldsWithOriginalStatus(context, urlPattern, Map.of(fieldName, fieldValue), waitSeconds);
-    }
-
-    /**
-     * 【捕获后Mock】先监控获取真实响应，修改多个字段，然后Mock，最后刷新页面
-     *
-     * 工作流程：
-     * 1. 设置持久化的 route 监听器，不等待，不超时
-     * 2. 当 API 第一次被调用时，捕获真实响应，修改字段，返回修改后的响应
-     * 3. 后续调用继续使用修改后的响应
-     *
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
-     * @param fieldsToMock 要修改的字段路径和值的映射
-     * @param mockStatusCode Mock的状态码
-     * @param waitSeconds 等待API响应的超时时间（秒）- 已废弃参数，保留以保持兼容性
-     *
-     * 示例：
-     * Map<String, Object> fields = new HashMap<>();
-     * fields.put("lastLoginTime", 1735689600000L);
-     * fields.put("status", "active");
-     * captureAndMockFields(page, "/rest/config", fields, 200, 30);
-     */
-    public static void captureAndMockFields(Page page, String urlPattern, Map<String, Object> fieldsToMock, int mockStatusCode, int waitSeconds) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Capture And Mock: {} ==========", pattern);
-        logger.info("Fields to modify: {}", fieldsToMock);
-        logger.info("Mock status code: {}", mockStatusCode);
-        logger.info("Note: Setting up persistent route handler - will capture and mock on first API call");
-
-        final boolean[] capturedAndMocked = new boolean[1];
-
-        try {
-            Pattern compiledPattern = Pattern.compile(pattern);
-
-            // 设置持久化的 route 监听器，不等待，不超时
-            page.route(compiledPattern.asPredicate(), route -> {
-                try {
-                    Request request = route.request();
-
-                    if (!capturedAndMocked[0]) {
-                        // 第一次调用：捕获真实响应，修改字段，返回修改后的响应
-                        logger.info(" First API call detected - capturing real response for: {}", request.url());
-
-                        APIResponse originalResponse = route.fetch();
-                        String originalBody = originalResponse.text();
-
-                        logger.info(" Original response captured successfully");
-
-                        // 修改响应字段
-                        String modifiedBody = modifyJsonFields(originalBody, fieldsToMock);
-                        logger.info(" Modified response with new field values");
-
-                        // 标记已捕获并 mock
-                        capturedAndMocked[0] = true;
-
-                        // 返回修改后的响应（使用指定的状态码）
-                        route.fulfill(new Route.FulfillOptions()
-                            .setStatus(mockStatusCode)
-                            .setHeaders(originalResponse.headers())
-                            .setBody(modifiedBody));
-
-                    } else {
-                        // 后续调用：继续使用原始请求（让真正的 mock 规则处理）
-                        logger.info(" Subsequent API call - resuming original request");
-                        route.resume();
-                    }
-                } catch (Exception e) {
-                    logger.error("Error handling route in capture-and-mock", e);
-                    try {
-                        route.resume();
-                    } catch (Exception ex) {
-                        logger.error("Error resuming route", ex);
-                    }
-                }
-            });
-
-            logger.info(" Persistent route handler set up for pattern: {}", pattern);
-            logger.info(" Note: Route will remain active until explicitly removed or page closed");
-            logger.info(" Capture and mock setup completed for: {}", pattern);
-
-        } catch (Exception e) {
-            logger.error("Failed to set up capture and mock for: {}", pattern, e);
-        }
-    }
-
-    /**
-     * 【捕获后Mock】自动使用原始API状态码的版本 - Page版本
-     *
-     * 工作流程：
-     * 1. 设置持久化的 route 监听器，不等待，不超时
-     * 2. 当 API 第一次被调用时，捕获真实响应，修改字段，返回修改后的响应
-     * 3. 后续调用继续使用修改后的响应
-     * 4. 【新增】如果autoStopAfterFirstCall为true，第一次调用后自动停止mock
-     *
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式
-     * @param fieldsToMock 要修改的字段
-     * @param waitSeconds 等待超时时间（秒）- 已废弃参数，保留以保持兼容性
-     * @param autoStopAfterFirstCall 第一次调用后是否自动停止mock（默认false）
-     */
-    public static void captureAndMockFieldsWithOriginalStatus(Page page, String urlPattern, Map<String, Object> fieldsToMock, int waitSeconds, boolean autoStopAfterFirstCall) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Capture And Mock With Original Status: {} ==========", pattern);
-        logger.info("Fields to modify: {}", fieldsToMock);
-        logger.info("Auto-stop after first call: {}", autoStopAfterFirstCall);
-        logger.info("Note: Setting up persistent route handler - will capture and mock on first API call");
-
-        final boolean[] capturedAndMocked = new boolean[1];
-
-        try {
-            Pattern compiledPattern = Pattern.compile(pattern);
-
-            // 设置持久化的 route 监听器，不等待，不超时
-            page.route(compiledPattern.asPredicate(), route -> {
-                try {
-                    Request request = route.request();
-
-                    if (!capturedAndMocked[0]) {
-                        // 第一次调用：捕获真实响应，修改字段，返回修改后的响应
-                        logger.info(" First API call detected - capturing real response for: {}", request.url());
-
-                        APIResponse originalResponse = route.fetch();
-                        String originalBody = originalResponse.text();
-                        int statusCode = originalResponse.status();
-
-                        logger.info(" Original status code: {}", statusCode);
-                        logger.info(" Original response captured successfully");
-
-                        // 修改响应字段
-                        String modifiedBody = modifyJsonFields(originalBody, fieldsToMock);
-                        logger.info(" Modified response with new field values");
-
-                        // 标记已捕获并 mock
-                        capturedAndMocked[0] = true;
-
-                        // 返回修改后的响应
-                        route.fulfill(new Route.FulfillOptions()
-                            .setStatus(statusCode)
-                            .setHeaders(originalResponse.headers())
-                            .setBody(modifiedBody));
-
-                        // 【新增】如果配置了自动停止，在第一次调用后停止mock
-                        if (autoStopAfterFirstCall) {
-                            logger.info(" Auto-stopping mock after first successful call for: {}", pattern);
-                            try {
-                                page.unroute(compiledPattern.asPredicate());
-                                logger.info("✓ Route removed for pattern: {} (auto-stop)", pattern);
-                            } catch (Exception ex) {
-                                logger.warn("Failed to auto-remove route for pattern {}: {}", pattern, ex.getMessage());
-                            }
-                        }
-
-                    } else {
-                        // 后续调用：继续使用原始请求（让真正的 mock 规则处理）
-                        logger.info(" Subsequent API call - resuming original request");
-                        route.resume();
-                    }
-                } catch (Exception e) {
-                    logger.error("Error handling route in capture-and-mock", e);
-                    try {
-                        route.resume();
-                    } catch (Exception ex) {
-                        logger.error("Error resuming route", ex);
-                    }
-                }
-            });
-
-            logger.info(" Persistent route handler set up for pattern: {}", pattern);
-            logger.info(" Note: Route will remain active until explicitly removed or page closed");
-            if (autoStopAfterFirstCall) {
-                logger.info(" Note: Route will be auto-removed after first successful call");
-            }
-            logger.info(" Capture and mock with original status setup completed for: {}", pattern);
-
-        } catch (Exception e) {
-            logger.error("Failed to set up capture and mock for: {}", pattern, e);
-        }
-    }
-
-    /**
-     * 【捕获后Mock】自动使用原始API状态码的版本 - Page版本（默认不自动停止）
-     *
-     * 工作流程：
-     * 1. 设置持久化的 route 监听器，不等待，不超时
-     * 2. 当 API 第一次被调用时，捕获真实响应，修改字段，返回修改后的响应
-     * 3. 后续调用继续使用修改后的响应
-     *
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式
-     * @param fieldsToMock 要修改的字段
-     * @param waitSeconds 等待超时时间（秒）- 已废弃参数，保留以保持兼容性
-     */
-    public static void captureAndMockFieldsWithOriginalStatus(Page page, String urlPattern, Map<String, Object> fieldsToMock, int waitSeconds) {
-        captureAndMockFieldsWithOriginalStatus(page, urlPattern, fieldsToMock, waitSeconds, false);
-    }
-
-    /**
-     * 【捕获后Mock】先监控获取真实响应，修改多个字段，然后Mock - Context版本
-     *
-     * 工作流程：
-     * 1. 设置持久化的 route 监听器，不等待，不超时
-     * 2. 当 API 第一次被调用时，捕获真实响应，修改字段，返回修改后的响应
-     * 3. 后续调用继续使用修改后的响应
-     *
-     * @param context Playwright BrowserContext对象
-     * @param urlPattern URL匹配模式
-     * @param fieldsToMock 要修改的字段
-     * @param mockStatusCode Mock的状态码
-     * @param waitSeconds 等待超时时间（秒）- 已废弃参数，保留以保持兼容性
-     */
-    public static void captureAndMockFields(BrowserContext context, String urlPattern, Map<String, Object> fieldsToMock, int mockStatusCode, int waitSeconds) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Capture And Mock (Context): {} ==========", pattern);
-        logger.info("Fields to modify: {}", fieldsToMock);
-        logger.info("Mock status code: {}", mockStatusCode);
-        logger.info("Note: Setting up persistent route handler - will capture and mock on first API call");
-
-        final boolean[] capturedAndMocked = new boolean[1];
-
-        try {
-            Pattern compiledPattern = Pattern.compile(pattern);
-
-            // 设置持久化的 route 监听器，不等待，不超时
-            context.route(compiledPattern.asPredicate(), route -> {
-                try {
-                    Request request = route.request();
-
-                    if (!capturedAndMocked[0]) {
-                        // 第一次调用：捕获真实响应，修改字段，返回修改后的响应
-                        logger.info(" First API call detected - capturing real response for: {}", request.url());
-
-                        APIResponse originalResponse = route.fetch();
-                        String originalBody = originalResponse.text();
-
-                        logger.info(" Original response captured successfully");
-
-                        // 修改响应字段
-                        String modifiedBody = modifyJsonFields(originalBody, fieldsToMock);
-                        logger.info(" Modified response with new field values");
-
-                        // 标记已捕获并 mock
-                        capturedAndMocked[0] = true;
-
-                        // 返回修改后的响应（使用指定的状态码）
-                        route.fulfill(new Route.FulfillOptions()
-                            .setStatus(mockStatusCode)
-                            .setHeaders(originalResponse.headers())
-                            .setBody(modifiedBody));
-
-                    } else {
-                        // 后续调用：继续使用原始请求（让真正的 mock 规则处理）
-                        logger.info(" Subsequent API call - resuming original request");
-                        route.resume();
-                    }
-                } catch (Exception e) {
-                    logger.error("Error handling route in capture-and-mock (Context)", e);
-                    try {
-                        route.resume();
-                    } catch (Exception ex) {
-                        logger.error("Error resuming route", ex);
-                    }
-                }
-            });
-
-            logger.info(" Persistent route handler set up for pattern: {}", pattern);
-            logger.info(" Note: Route will remain active until explicitly removed or context closed");
-            logger.info(" Capture and mock setup completed for: {}", pattern);
-
-        } catch (Exception e) {
-            logger.error("Failed to set up capture and mock (Context) for: {}", pattern, e);
-        }
-    }
-
-    /**
-     * 【捕获后Mock】自动使用原始API状态码的版本 - Context版本
-     *
-     * 工作流程：
-     * 1. 设置持久化的 route 监听器，不等待，不超时
-     * 2. 当 API 第一次被调用时，捕获真实响应，修改字段，返回修改后的响应
-     * 3. 后续调用继续使用修改后的响应
-     * 4. 【新增】如果autoStopAfterFirstCall为true，第一次调用后自动停止mock
-     *
-     * @param context Playwright BrowserContext对象
-     * @param urlPattern URL匹配模式
-     * @param fieldsToMock 要修改的字段
-     * @param waitSeconds 等待超时时间（秒）- 已废弃参数，保留以保持兼容性
-     * @param autoStopAfterFirstCall 第一次调用后是否自动停止mock（默认false）
-     */
-    public static void captureAndMockFieldsWithOriginalStatus(BrowserContext context, String urlPattern, Map<String, Object> fieldsToMock, int waitSeconds, boolean autoStopAfterFirstCall) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Capture And Mock With Original Status (Context): {} ==========", pattern);
-        logger.info("Fields to modify: {}", fieldsToMock);
-        logger.info("Auto-stop after first call: {}", autoStopAfterFirstCall);
-        logger.info("Note: Setting up persistent route handler - will capture and mock on first API call");
-
-        final boolean[] capturedAndMocked = new boolean[1];
-
-        try {
-            Pattern compiledPattern = Pattern.compile(pattern);
-
-            // 设置持久化的 route 监听器，不等待，不超时
-            context.route(compiledPattern.asPredicate(), route -> {
-                try {
-                    Request request = route.request();
-
-                    if (!capturedAndMocked[0]) {
-                        // 第一次调用：捕获真实响应，修改字段，返回修改后的响应
-                        logger.info(" First API call detected - capturing real response for: {}", request.url());
-
-                        APIResponse originalResponse = route.fetch();
-                        String originalBody = originalResponse.text();
-                        int statusCode = originalResponse.status();
-
-                        logger.info(" Original status code: {}", statusCode);
-                        logger.info(" Original response captured successfully");
-
-                        // 修改响应字段
-                        String modifiedBody = modifyJsonFields(originalBody, fieldsToMock);
-                        logger.info(" Modified response with new field values");
-
-                        // 标记已捕获并 mock
-                        capturedAndMocked[0] = true;
-
-                        // 返回修改后的响应
-                        route.fulfill(new Route.FulfillOptions()
-                            .setStatus(statusCode)
-                            .setHeaders(originalResponse.headers())
-                            .setBody(modifiedBody));
-
-                        // 【新增】如果配置了自动停止，在第一次调用后停止mock
-                        if (autoStopAfterFirstCall) {
-                            logger.info(" Auto-stopping mock after first successful call for: {}", pattern);
-                            try {
-                                context.unroute(compiledPattern.asPredicate());
-                                logger.info("✓ Route removed for pattern: {} (auto-stop)", pattern);
-                            } catch (Exception ex) {
-                                logger.warn("Failed to auto-remove route for pattern {}: {}", pattern, ex.getMessage());
-                            }
-                        }
-
-                    } else {
-                        // 后续调用：继续使用原始请求（让真正的 mock 规则处理）
-                        logger.info(" Subsequent API call - resuming original request");
-                        route.resume();
-                    }
-                } catch (Exception e) {
-                    logger.error("Error handling route in capture-and-mock (Context)", e);
-                    try {
-                        route.resume();
-                    } catch (Exception ex) {
-                        logger.error("Error resuming route", ex);
-                    }
-                }
-            });
-
-            logger.info(" Persistent route handler set up for pattern: {}", pattern);
-            logger.info(" Note: Route will remain active until explicitly removed or context closed");
-            if (autoStopAfterFirstCall) {
-                logger.info(" Note: Route will be auto-removed after first successful call");
-            }
-            logger.info(" Capture and mock with original status setup completed for: {}", pattern);
-
-        } catch (Exception e) {
-            logger.error("Failed to set up capture and mock (Context) for: {}", pattern, e);
-        }
-    }
-
-    /**
-     * 【捕获后Mock】自动使用原始API状态码的版本 - Context版本（默认不自动停止）
-     *
-     * 工作流程：
-     * 1. 设置持久化的 route 监听器，不等待，不超时
-     * 2. 当 API 第一次被调用时，捕获真实响应，修改字段，返回修改后的响应
-     * 3. 后续调用继续使用修改后的响应
-     *
-     * @param context Playwright BrowserContext对象
-     * @param urlPattern URL匹配模式
-     * @param fieldsToMock 要修改的字段
-     * @param waitSeconds 等待超时时间（秒）- 已废弃参数，保留以保持兼容性
-     */
-    public static void captureAndMockFieldsWithOriginalStatus(BrowserContext context, String urlPattern, Map<String, Object> fieldsToMock, int waitSeconds) {
-        captureAndMockFieldsWithOriginalStatus(context, urlPattern, fieldsToMock, waitSeconds, false);
-    }
-
-    // ==================== 辅助类和方法 ====================
-
-    /**
-     * 捕获的响应数据
-     */
-    public static class CapturedResponse {
-        public String body;
-        public int statusCode;
-
-        public CapturedResponse(String body, int statusCode) {
-            this.body = body;
-            this.statusCode = statusCode;
-        }
-    }
-
-    /**
-     * 修改JSON中的字段（使用JsonPath）
-     *
-     * @param jsonString 原始JSON字符串
-     * @param fieldsToModify 要修改的字段映射（key为JsonPath，value为新值）
-     * @return 修改后的JSON字符串
-     */
-    private static String modifyJsonFields(String jsonString, Map<String, Object> fieldsToModify) {
-        if (jsonString == null || jsonString.trim().isEmpty()) {
-            return jsonString;
-        }
-
-        try {
-            // 使用ObjectMapper解析JSON
-            JsonNode rootNode = objectMapper.readTree(jsonString);
-
-            // 遍历要修改的字段
-            for (Map.Entry<String, Object> entry : fieldsToModify.entrySet()) {
-                String jsonPath = entry.getKey();
-                Object newValue = entry.getValue();
-
-                try {
-                    // 使用JsonPath定位字段
-                    Object valueAtPath = JsonPath.parse(jsonString).read(jsonPath);
-
-                    // 简单的实现：只支持顶层字段或简单的点号分隔路径
-                    // 对于更复杂的路径，需要使用JsonPath的modify功能
-                    String[] pathSegments = jsonPath.split("\\.");
-                    JsonNode currentNode = rootNode;
-
-                    // 遍历到最后一个节点之前的所有节点
-                    for (int i = 0; i < pathSegments.length - 1; i++) {
-                        String segment = pathSegments[i];
-                        if (segment.contains("[")) {
-                            // 处理数组索引，如 items[0]
-                            String arrayName = segment.substring(0, segment.indexOf("["));
-                            int index = Integer.parseInt(segment.substring(segment.indexOf("[") + 1, segment.indexOf("]")));
-                            currentNode = currentNode.path(arrayName).get(index);
-                        } else {
-                            currentNode = currentNode.path(segment);
-                        }
-                        if (currentNode.isMissingNode()) {
-                            logger.warn("Path segment '{}' not found in JSON", segment);
-                            break;
-                        }
-                    }
-
-                    // 修改最后一个节点
-                    if (currentNode.isObject() && !currentNode.isMissingNode()) {
-                        String lastSegment = pathSegments[pathSegments.length - 1];
-                        if (lastSegment.contains("[")) {
-                            // 处理数组索引
-                            String arrayName = lastSegment.substring(0, lastSegment.indexOf("["));
-                            int index = Integer.parseInt(lastSegment.substring(lastSegment.indexOf("[") + 1, lastSegment.indexOf("]")));
-                            JsonNode arrayNode = currentNode.path(arrayName);
-                            if (!arrayNode.isMissingNode()) {
-                                ObjectNode mutableNode = (ObjectNode) currentNode;
-                                JsonNode newArrayNode = arrayNode;
-                                // 对于数组中的对象，需要特殊处理
-                                if (arrayNode.isArray() && index < arrayNode.size() && arrayNode.get(index).isObject()) {
-                                    // 这里简化处理，直接跳过数组元素的修改
-                                    logger.warn("Array element modification not fully supported: {}", jsonPath);
-                                }
-                            }
-                        } else {
-                            // 简单对象字段修改
-                            ObjectNode mutableNode = (ObjectNode) currentNode;
-                            if (newValue instanceof String) {
-                                mutableNode.put(lastSegment, (String) newValue);
-                            } else if (newValue instanceof Integer) {
-                                mutableNode.put(lastSegment, (Integer) newValue);
-                            } else if (newValue instanceof Long) {
-                                mutableNode.put(lastSegment, (Long) newValue);
-                            } else if (newValue instanceof Double) {
-                                mutableNode.put(lastSegment, (Double) newValue);
-                            } else if (newValue instanceof Boolean) {
-                                mutableNode.put(lastSegment, (Boolean) newValue);
-                            } else {
-                                mutableNode.set(lastSegment, objectMapper.valueToTree(newValue));
-                            }
-                            logger.info("Modified field: {} = {}", jsonPath, newValue);
-                        }
-                    } else {
-                        logger.warn("Cannot modify path: {} (not an object node or path not found)", jsonPath);
-                    }
-                } catch (PathNotFoundException e) {
-                    logger.warn("JSON path '{}' not found in response, skipping modification", jsonPath);
-                }
-            }
-
-            return objectMapper.writeValueAsString(rootNode);
-        } catch (Exception e) {
-            logger.error("Failed to modify JSON fields", e);
-            return jsonString;
-        }
-    }
-
-
-
-    /**
-     * 【高级】动态Mock - 基于请求内容生成响应
-     *
-     * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
-     * @param generator 响应生成器
-     *
-     * 示例：
-     * mockDynamic(page, "/api/users", (request, context) -> {
-     *     String userId = extractUserId(request.url());
-     *     return "{\"id\":" + userId + ",\"name\":\"User " + userId + "\"}";
-     * });
-     */
-    public static void mockDynamic(Page page, String urlPattern, ResponseGenerator generator) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Mocking API with dynamic response: {} ==========", pattern);
-
-        MockRule rule = new MockRule("mock-dynamic-" + pattern, pattern)
-            .responseGenerator(generator);
-        registerMockRule(rule);
-        applyMocks(page);
-        recordMockConfiguration();
-
-        logger.info(" Mock API with dynamic response configured successfully!");
-    }
-
-    /**
-     * 【高级】动态Mock - 基于请求内容生成响应
-     *
-     * @param context Playwright BrowserContext对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
-     * @param generator 响应生成器
-     *
-     * 示例：
-     * mockDynamic(context, "/api/users", (request, context) -> {
-     *     String userId = extractUserId(request.url());
-     *     return "{\"id\":" + userId + ",\"name\":\"User " + userId + "\"}";
-     * });
-     */
-    public static void mockDynamic(BrowserContext context, String urlPattern, ResponseGenerator generator) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Mocking API with dynamic response: {} ==========", pattern);
-
-        MockRule rule = new MockRule("mock-dynamic-" + pattern, pattern)
-            .responseGenerator(generator);
-        registerMockRule(rule);
-        applyMocks(context);
-        recordMockConfiguration();
-
-        logger.info(" Mock API with dynamic response configured successfully!");
-    }
-
-    /**
-     * 将普通URL模式转换为正则表达式
-     * 如果URL已经是正则表达式（包含.*、\\d等），则原样返回
-     * 否则自动添加.*前缀和后缀进行灵活匹配
-     *
-     * @param urlPattern URL模式（普通URL或正则表达式）
-     * @return 正则表达式模式
-     *
-     * 示例：
-     * - "/api/users" -> ".*api/users.*"
-     * - "api/users" -> ".*api/users.*"
-     * - ".*api/.*" -> ".*api/.*" (已经是正则，不转换)
-     */
-    private static String toRegexPattern(String urlPattern) {
+    private static String toGlobPattern(String urlPattern) {
         if (urlPattern == null || urlPattern.isEmpty()) {
-            return ".*";
+            return "**";
         }
 
-        // 检查是否已经是正则表达式（包含常见的正则元字符）
-        boolean isRegex = urlPattern.contains(".*") || urlPattern.contains("\\d")
-                       || urlPattern.contains("?") || urlPattern.contains("+")
-                       || urlPattern.contains("\\w") || urlPattern.contains("\\s");
-
-        if (isRegex) {
-            return urlPattern; // 已经是正则表达式，直接返回
-        }
-
-        // 如果以 / 开头，去掉开头的 /，然后添加 .* 前后缀
-        // 例如：/api/users -> .*api/users.*
+        // 移除开头的斜杠（如果有）
         String normalized = urlPattern;
         if (normalized.startsWith("/")) {
             normalized = normalized.substring(1);
         }
 
-        return ".*" + normalized + ".*";
-    }
-
-    // ==================== 请求修改API（拦截并修改请求） ====================
-    // 注意：以下方法已废弃，请使用Builder模式
-
-    /**
-     * 【简化】修改请求 - 添加或替换请求头
-     *
-     * @param page Playwright Page对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param headerName 头名称
-     * @param headerValue 头值
-     *
-     * 示例：
-     * modifyRequestHeader(page, "/api/users", "Authorization", "Bearer token123");
-     * modifyRequestHeader(page, "https://api.example.com/users", "Authorization", "Bearer token123");
-     */
-    public static void modifyRequestHeader(Page page, String endpoint, String headerName, String headerValue) {
-        logger.info("========== Modifying request header for: {} ==========", endpoint);
-        logger.info("   Header: {} = {}", headerName, headerValue);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(page);
-
-        // 添加修改规则
-        addRequestModificationRuleForPage(endpoint, (route, request) -> {
-            Map<String, String> headers = new HashMap<>(request.headers());
-            headers.put(headerName, headerValue);
-            Route.ResumeOptions options = new Route.ResumeOptions().setHeaders(headers);
-
-            // 打印详细的修改信息
-            printRequestModificationInfo(request, options, "Request Header (" + headerName + " = " + headerValue + ")",
-                    null, headers, null);
-
-            return options;
-        });
-
-        logger.info(" Request header modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 添加或替换请求头
-     *
-     * @param context Playwright BrowserContext对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param headerName 头名称
-     * @param headerValue 头值
-     *
-     * 示例：
-     * modifyRequestHeader(context, "/api/users", "Authorization", "Bearer token123");
-     * modifyRequestHeader(context, "https://api.example.com/users", "Authorization", "Bearer token123");
-     */
-    public static void modifyRequestHeader(BrowserContext context, String endpoint, String headerName, String headerValue) {
-        logger.info("========== Modifying request header for: {} ==========", endpoint);
-        logger.info("   Header: {} = {}", headerName, headerValue);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(context);
-
-        // 添加修改规则
-        addRequestModificationRule(endpoint, (route, request) -> {
-            Map<String, String> headers = new HashMap<>(request.headers());
-            headers.put(headerName, headerValue);
-            Route.ResumeOptions options = new Route.ResumeOptions().setHeaders(headers);
-
-            // 打印详细的修改信息
-            printRequestModificationInfo(request, options, "Request Header (" + headerName + " = " + headerValue + ")",
-                    null, headers, null);
-
-            return options;
-        });
-
-        logger.info(" Request header modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 添加或替换请求体
-     *
-     * @param page Playwright Page对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param newBody 新的请求体
-     *
-     * 示例：
-     * modifyRequestBody(page, "/api/users", "{\"name\":\"new_name\"}");
-     * modifyRequestBody(page, "https://api.example.com/users", "{\"name\":\"new_name\"}");
-     */
-    public static void modifyRequestBody(Page page, String endpoint, String newBody) {
-        logger.info("========== Modifying request body for: {} ==========", endpoint);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(page);
-
-        // 添加修改规则
-        addRequestModificationRuleForPage(endpoint, (route, request) -> {
-            Route.ResumeOptions options = new Route.ResumeOptions().setPostData(newBody);
-
-            // 打印详细的修改信息
-            printRequestModificationInfo(request, options, "Request Body", null, null, newBody);
-
-            return options;
-        });
-
-        logger.info(" Request body modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 添加或替换请求体
-     *
-     * @param context Playwright BrowserContext对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param newBody 新的请求体
-     *
-     * 示例：
-     * modifyRequestBody(context, "/api/users", "{\"name\":\"new_name\"}");
-     * modifyRequestBody(context, "https://api.example.com/users", "{\"name\":\"new_name\"}");
-     */
-    public static void modifyRequestBody(BrowserContext context, String endpoint, String newBody) {
-        logger.info("========== Modifying request body for: {} ==========", endpoint);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(context);
-
-        // 添加修改规则
-        addRequestModificationRule(endpoint, (route, request) -> {
-            Route.ResumeOptions options = new Route.ResumeOptions().setPostData(newBody);
-
-            // 打印详细的修改信息
-            printRequestModificationInfo(request, options, "Request Body", null, null, newBody);
-
-            return options;
-        });
-
-        logger.info(" Request body modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 修改查询参数
-     *
-     * 功能：
-     * - 如果参数已存在，替换其值
-     * - 如果参数不存在，添加新参数
-     * - 如果 paramValue 为 null，删除该参数
-     *
-     * @param page Playwright Page对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param paramName 参数名
-     * @param paramValue 参数值（null 表示删除该参数）
-     *
-     * 示例：
-     * modifyRequestQueryParam(page, "/api/users", "userId", "123");
-     * modifyRequestQueryParam(page, "/api/users", "userId", null);  // 删除参数
-     */
-    public static void modifyRequestQueryParam(Page page, String endpoint, String paramName, String paramValue) {
-        logger.info("========== Modifying request query param for: {} ==========", endpoint);
-        if (paramValue == null) {
-            logger.info("   Removing param: {}", paramName);
-        } else {
-            logger.info("   Param: {} = {}", paramName, paramValue);
-        }
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(page);
-
-        // 添加修改规则
-        addRequestModificationRuleForPage(endpoint, (route, request) -> {
-            String url = request.url();
-            String newUrl = modifyUrlQueryParam(url, paramName, paramValue);
-            Route.ResumeOptions options = new Route.ResumeOptions().setUrl(newUrl);
-
-            // 打印详细的修改信息（只打印 URL 变化）
-            logger.info("========================================");
-            logger.info("Modifying Query Parameter ({} = {})", paramName, paramValue);
-            logger.info("========================================");
-            logger.info("[Original Request]");
-            logger.info("   URL: {}", url);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-
-            logger.info("----------------------------------------");
-            logger.info("[Modified Request]");
-            logger.info("   URL: {}", newUrl);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-            logger.info("========================================");
-            logger.info("Request modified successfully!");
-            logger.info("========================================");
-
-            return options;
-        });
-
-        logger.info(" Request query param modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 修改查询参数
-     *
-     * 功能：
-     * - 如果参数已存在，替换其值
-     * - 如果参数不存在，添加新参数
-     * - 如果 paramValue 为 null，删除该参数
-     *
-     * @param context Playwright BrowserContext对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param paramName 参数名
-     * @param paramValue 参数值（null 表示删除该参数）
-     *
-     * 示例：
-     * modifyRequestQueryParam(context, "/api/users", "userId", "123");
-     * modifyRequestQueryParam(context, "/api/users", "userId", null);  // 删除参数
-     */
-    public static void modifyRequestQueryParam(BrowserContext context, String endpoint, String paramName, String paramValue) {
-        logger.info("========== Modifying request query param for: {} ==========", endpoint);
-        if (paramValue == null) {
-            logger.info("   Removing param: {}", paramName);
-        } else {
-            logger.info("   Param: {} = {}", paramName, paramValue);
-        }
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(context);
-
-        // 添加修改规则
-        addRequestModificationRule(endpoint, (route, request) -> {
-            String url = request.url();
-            String newUrl = modifyUrlQueryParam(url, paramName, paramValue);
-            Route.ResumeOptions options = new Route.ResumeOptions().setUrl(newUrl);
-
-            // 打印详细的修改信息（只打印 URL 变化）
-            logger.info("========================================");
-            logger.info("Modifying Query Parameter ({} = {})", paramName, paramValue);
-            logger.info("========================================");
-            logger.info("[Original Request]");
-            logger.info("   URL: {}", url);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-
-            logger.info("----------------------------------------");
-            logger.info("[Modified Request]");
-            logger.info("   URL: {}", newUrl);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-            logger.info("========================================");
-            logger.info("Request modified successfully!");
-            logger.info("========================================");
-
-            return options;
-        });
-
-        logger.info(" Request query param modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 批量修改查询参数
-     *
-     * 功能：
-     * - 一次修改多个查询参数
-     * - 如果参数已存在，替换其值
-     * - 如果参数不存在，添加新参数
-     * - 如果值为 null，删除该参数
-     *
-     * @param page Playwright Page对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param params 参数映射（key=参数名, value=参数值，null 表示删除）
-     *
-     * 示例：
-     * modifyRequestQueryParams(page, "/api/users", Map.of("userId", "123", "token", "abc"));
-     * modifyRequestQueryParams(page, "/api/users", Map.of("userId", null));  // 删除参数
-     */
-    public static void modifyRequestQueryParams(Page page, String endpoint, Map<String, String> params) {
-        logger.info("========== Modifying request query params for: {} ==========", endpoint);
-        params.forEach((key, value) -> {
-            if (value == null) {
-                logger.info("   Removing param: {}", key);
-            } else {
-                logger.info("   Param: {} = {}", key, value);
-            }
-        });
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(page);
-
-        // 添加修改规则
-        addRequestModificationRuleForPage(endpoint, (route, request) -> {
-            String url = request.url();
-            String newUrl = url;
-
-            // 逐个修改参数
-            for (Map.Entry<String, String> entry : params.entrySet()) {
-                newUrl = modifyUrlQueryParam(newUrl, entry.getKey(), entry.getValue());
-            }
-
-            Route.ResumeOptions options = new Route.ResumeOptions().setUrl(newUrl);
-
-            // 打印详细的修改信息
-            logger.info("========================================");
-            logger.info("Modifying Query Parameters: {}", params);
-            logger.info("========================================");
-            logger.info("[Original Request]");
-            logger.info("   URL: {}", url);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-
-            logger.info("----------------------------------------");
-            logger.info("[Modified Request]");
-            logger.info("   URL: {}", newUrl);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-            logger.info("========================================");
-            logger.info("Request modified successfully!");
-            logger.info("========================================");
-
-            return options;
-        });
-
-        logger.info(" Request query params modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 批量修改查询参数
-     *
-     * 功能：
-     * - 一次修改多个查询参数
-     * - 如果参数已存在，替换其值
-     * - 如果参数不存在，添加新参数
-     * - 如果值为 null，删除该参数
-     *
-     * @param context Playwright BrowserContext对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param params 参数映射（key=参数名, value=参数值，null 表示删除）
-     *
-     * 示例：
-     * modifyRequestQueryParams(context, "/api/users", Map.of("userId", "123", "token", "abc"));
-     * modifyRequestQueryParams(context, "/api/users", Map.of("userId", null));  // 删除参数
-     */
-    public static void modifyRequestQueryParams(BrowserContext context, String endpoint, Map<String, String> params) {
-        logger.info("========== Modifying request query params for: {} ==========", endpoint);
-        params.forEach((key, value) -> {
-            if (value == null) {
-                logger.info("   Removing param: {}", key);
-            } else {
-                logger.info("   Param: {} = {}", key, value);
-            }
-        });
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(context);
-
-        // 添加修改规则
-        addRequestModificationRule(endpoint, (route, request) -> {
-            String url = request.url();
-            String newUrl = url;
-
-            // 逐个修改参数
-            for (Map.Entry<String, String> entry : params.entrySet()) {
-                newUrl = modifyUrlQueryParam(newUrl, entry.getKey(), entry.getValue());
-            }
-
-            Route.ResumeOptions options = new Route.ResumeOptions().setUrl(newUrl);
-
-            // 打印详细的修改信息
-            logger.info("========================================");
-            logger.info("Modifying Query Parameters: {}", params);
-            logger.info("========================================");
-            logger.info("[Original Request]");
-            logger.info("   URL: {}", url);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-
-            logger.info("----------------------------------------");
-            logger.info("[Modified Request]");
-            logger.info("   URL: {}", newUrl);
-            logger.info("   Method: {}", request.method());
-            logger.info("   Headers: {}", formatHeaders(request.headers()));
-            logger.info("   Body: {}", formatBody(request.postData()));
-            logger.info("========================================");
-            logger.info("Request modified successfully!");
-            logger.info("========================================");
-
-            return options;
-        });
-
-        logger.info(" Request query params modifier configured successfully!");
-    }
-
-    /**
-     * 【简化】修改请求 - 修改请求方法
-     *
-     * 注意：只修改 HTTP 方法，不自动添加请求体或修改 headers
-     * 如需添加请求体，请配合 modifyRequestBody 使用
-     *
-     * @param page Playwright Page对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param newMethod 新的HTTP方法（GET, POST, PUT, DELETE等）
-     *
-     * 示例：
-     * modifyRequestMethod(page, "/api/users", "POST");
-     */
-    public static void modifyRequestMethod(Page page, String endpoint, String newMethod) {
-        logger.info("========== Modifying request method for: {} -> {} ==========", endpoint, newMethod);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(page);
-
-        // 添加修改规则
-        addRequestModificationRuleForPage(endpoint, (route, request) -> {
-            Route.ResumeOptions options = new Route.ResumeOptions().setMethod(newMethod);
-
-            // 打印详细的修改信息
-            printRequestModificationInfo(request, options, "HTTP Method", newMethod, null, null);
-
-            return options;
-        });
-
-        logger.info(" Request method modifier configured successfully!");
-    }
-
-
-    /**
-     * 【高级】自定义请求拦截器 - 完全控制请求修改
-     *
-     * @param page Playwright Page对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param interceptor 请求拦截器
-     *
-     * 示例：
-     * interceptRequest(page, "/api/users", (route, request) -> {
-     *     return new Route.ResumeOptions()
-     *         .setMethod("POST")
-     *         .setPostData("{\"modified\":true}")
-     *         .setHeaders(Map.of("X-Custom", "value"));
-     * });
-     */
-    public static void interceptRequest(Page page, String endpoint, RequestInterceptor interceptor) {
-        logger.info("========== Intercepting requests for: {} ==========", endpoint);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(page);
-
-        // 添加拦截规则（包装 interceptor 以添加日志）
-        addRequestModificationRuleForPage(endpoint, (route, request) -> {
-            Route.ResumeOptions options = interceptor.intercept(route, request);
-
-            // 打印详细的修改信息（使用简化版本，因为无法从 options 中获取修改后的值）
-            if (options != null) {
-                printRequestModificationInfo(request, options, "Interceptor");
-            }
-
-            return options;
-        });
-
-        logger.info(" Request interceptor configured successfully!");
-    }
-
-    /**
-     * 【高级】自定义请求拦截器 - 完全控制请求修改
-     *
-     * @param context Playwright BrowserContext对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param interceptor 请求拦截器
-     *
-     * 示例：
-     * interceptRequest(context, "/api/users", (route, request) -> {
-     *     return new Route.ResumeOptions()
-     *         .setMethod("POST")
-     *         .setPostData("{\"modified\":true}")
-     *         .setHeaders(Map.of("X-Custom", "value"));
-     * });
-     */
-    public static void interceptRequest(BrowserContext context, String endpoint, RequestInterceptor interceptor) {
-        logger.info("========== Intercepting requests for: {} ==========", endpoint);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(context);
-
-        // 添加拦截规则（包装 interceptor 以添加日志）
-        addRequestModificationRule(endpoint, (route, request) -> {
-            Route.ResumeOptions options = interceptor.intercept(route, request);
-
-            // 打印详细的修改信息（使用简化版本，因为无法从 options 中获取修改后的值）
-            if (options != null) {
-                printRequestModificationInfo(request, options, "Interceptor");
-            }
-
-            return options;
-        });
-
-        logger.info(" Request interceptor configured successfully!");
-    }
-
-    /**
-     * 【推荐】修改请求方法 - 只修改 HTTP 方法，不影响其他请求
-     * 使用统一的路由处理，避免多个 ".*" 路由冲突
-     *
-     * 注意：只修改 HTTP 方法，不自动添加请求体或修改 headers
-     * 如需添加请求体，请配合 modifyRequestBody 使用
-     *
-     * @param context Playwright BrowserContext对象
-     * @param endpoint URL或endpoint（通过 request.url().contains() 判断）
-     * @param newMethod 新的HTTP方法（GET, POST, PUT, DELETE等）
-     *
-     * 示例：
-     * modifyRequestMethod(context, "/api/users", "POST");
-     * modifyRequestMethod(context, "https://api.example.com/users", "POST");
-     */
-    public static void modifyRequestMethod(BrowserContext context, String endpoint, String newMethod) {
-        logger.info("========== Modifying request method for: {} -> {} ==========", endpoint, newMethod);
-
-        // 注册统一路由处理器（仅注册一次）
-        registerUnifiedRouteHandler(context);
-
-        // 添加修改规则
-        addRequestModificationRule(endpoint, (route, request) -> {
-            Route.ResumeOptions options = new Route.ResumeOptions().setMethod(newMethod);
-
-            // 打印详细的修改信息
-            printRequestModificationInfo(request, options, "HTTP Method", newMethod, null, null);
-
-            return options;
-        });
-
-        logger.info(" Request method modifier configured successfully!");
+        // 返回 glob 模式
+        return "**/" + normalized + "**";
     }
 
     // ==================== 传统API（向后兼容） ====================
@@ -1732,7 +507,7 @@ public class ApiMonitorAndMockManager {
     /**
      * 为Page应用所有Mock规则
      */
-    public static void applyMocks(Page page) {
+    private static void applyMocks(Page page) {
         logger.info("Applying {} mock rules to page", mockRules.size());
 
         // 存储当前page引用
@@ -1749,7 +524,7 @@ public class ApiMonitorAndMockManager {
     /**
      * 为BrowserContext应用所有Mock规则
      */
-    public static void applyMocks(BrowserContext context) {
+    private static void applyMocks(BrowserContext context) {
         logger.info("Applying {} mock rules to context", mockRules.size());
 
         // 存储当前context引用
@@ -1767,26 +542,26 @@ public class ApiMonitorAndMockManager {
      * 应用单个Mock规则到Page
      */
     private static void applyMockRule(Page page, MockRule rule) {
-        Pattern urlPattern = Pattern.compile(rule.getUrlPattern());
-        
-        page.route(urlPattern.asPredicate(), route -> {  // 使用pattern predicate
+        String globPattern = rule.getUrlPattern();
+
+        page.route(globPattern, route -> {
             handleMockRoute(route, rule);
         });
-        
-        logger.info("Applied mock rule '{}' to page for pattern: {}", rule.getName(), rule.getUrlPattern());
+
+        logger.info("Applied mock rule '{}' to page for glob pattern: {}", rule.getName(), globPattern);
     }
-    
+
     /**
      * 应用单个Mock规则到BrowserContext
      */
     private static void applyMockRule(BrowserContext context, MockRule rule) {
-        Pattern urlPattern = Pattern.compile(rule.getUrlPattern());
-        
-        context.route(urlPattern.asPredicate(), route -> {
+        String globPattern = rule.getUrlPattern();
+
+        context.route(globPattern, route -> {
             handleMockRoute(route, rule);
         });
-        
-        logger.info("Applied mock rule '{}' to context for pattern: {}", rule.getName(), rule.getUrlPattern());
+
+        logger.info("Applied mock rule '{}' to context for glob pattern: {}", rule.getName(), globPattern);
     }
     
     /**
@@ -1826,18 +601,7 @@ public class ApiMonitorAndMockManager {
                 return;
             }
 
-            // 处理请求拦截（支持全面修改）
-            if (rule.requestInterceptor != null) {
-                Route.ResumeOptions continueOptions = rule.requestInterceptor.intercept(route, request);
-                if (continueOptions != null) {
-                    // 打印详细的修改信息（使用简化版本，因为无法从 options 中获取修改后的值）
-                    printRequestModificationInfo(request, continueOptions, "Mock Interceptor (" + rule.getName() + ")");
-                    route.resume(continueOptions);
-                    return;
-                }
-            }
-
-            // 普通Mock或延迟Mock
+            // Mock响应
             handleNormalMock(route, rule);
 
         } catch (Exception e) {
@@ -2024,8 +788,6 @@ public class ApiMonitorAndMockManager {
             logger.warn("Failed to remove routes from context: {}", e.getMessage());
         }
         mockRules.clear();
-        requestModificationRules.clear();
-        unifiedRouteHandlerRegistered = false;
         logger.info("✓ All mock rules cleared");
         logger.info("========== All Mocks Stopped ==========");
     }
@@ -2043,8 +805,6 @@ public class ApiMonitorAndMockManager {
             logger.warn("Failed to remove routes from page: {}", e.getMessage());
         }
         mockRules.clear();
-        pageRequestModificationRules.clear();
-        unifiedPageRouteHandlerRegistered = false;
         logger.info("✓ All mock rules cleared");
         logger.info("========== All Mocks Stopped ==========");
     }
@@ -2052,17 +812,16 @@ public class ApiMonitorAndMockManager {
     /**
      * 停止指定URL的Mock - 只移除特定URL的route（Context版本）
      * @param context Playwright BrowserContext对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
+     * @param urlPattern URL匹配模式
      */
     public static void stopMock(BrowserContext context, String urlPattern) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Stopping Mock for URL: {} ==========", pattern);
+        String globPattern = toGlobPattern(urlPattern);
+        logger.info("========== Stopping Mock for URL: {} ==========", globPattern);
         try {
-            Pattern compiledPattern = Pattern.compile(pattern);
-            context.unroute(compiledPattern.asPredicate());
-            logger.info("✓ Route removed for pattern: {}", pattern);
+            context.unroute(globPattern);
+            logger.info("✓ Route removed for glob pattern: {}", globPattern);
         } catch (Exception e) {
-            logger.warn("Failed to remove route for pattern {}: {}", pattern, e.getMessage());
+            logger.warn("Failed to remove route for glob pattern {}: {}", globPattern, e.getMessage());
         }
         logger.info("========== Mock Stopped ==========");
     }
@@ -2070,17 +829,16 @@ public class ApiMonitorAndMockManager {
     /**
      * 停止指定URL的Mock - 只移除特定URL的route（Page版本）
      * @param page Playwright Page对象
-     * @param urlPattern URL匹配模式（支持普通URL或正则）
+     * @param urlPattern URL匹配模式
      */
     public static void stopMock(Page page, String urlPattern) {
-        String pattern = toRegexPattern(urlPattern);
-        logger.info("========== Stopping Mock for URL: {} ==========", pattern);
+        String globPattern = toGlobPattern(urlPattern);
+        logger.info("========== Stopping Mock for URL: {} ==========", globPattern);
         try {
-            Pattern compiledPattern = Pattern.compile(pattern);
-            page.unroute(compiledPattern.asPredicate());
-            logger.info("✓ Route removed for pattern: {}", pattern);
+            page.unroute(globPattern);
+            logger.info("✓ Route removed for glob pattern: {}", globPattern);
         } catch (Exception e) {
-            logger.warn("Failed to remove route for pattern {}: {}", pattern, e.getMessage());
+            logger.warn("Failed to remove route for glob pattern {}: {}", globPattern, e.getMessage());
         }
         logger.info("========== Mock Stopped ==========");
     }
@@ -2278,15 +1036,6 @@ public class ApiMonitorAndMockManager {
      * 1. forEndpoint() - 指定 API endpoint，自动匹配包含该 endpoint 的请求
      * 2. forUrl() - 指定 Host URL（可选），用于精确匹配特定域名
      *
-     * 示例用法（修改请求）：
-     * ApiMonitorAndMockManager.mock(context)
-     *     .forEndpoint("/api/users")  // 指定 endpoint
-     *     .withInterceptor((route, request) -> {
-     *         // 只修改匹配的请求，无需额外判断
-     *         return new Route.ResumeOptions().setMethod("POST");
-     *     })
-     *     .build();
-     *
      * 示例用法（Mock 响应）：
      * ApiMonitorAndMockManager.mock(context)
      *     .forEndpoint("/api/users")
@@ -2461,20 +1210,6 @@ public class ApiMonitorAndMockManager {
         }
 
         /**
-         * 设置请求拦截器（针对最后一个添加的规则）
-         *
-         * @param interceptor 请求拦截器
-         * @return this构建器实例
-         */
-        public MockBuilder withInterceptor(RequestInterceptor interceptor) {
-            if (!mockRules.isEmpty()) {
-                mockRules.get(mockRules.size() - 1).requestInterceptor(interceptor);
-            }
-            return this;
-        }
-
-
-        /**
          * 是否自动清空旧的Mock规则（默认true）
          *
          * @param autoClear true表示自动清空，false表示不清空
@@ -2519,268 +1254,4 @@ public class ApiMonitorAndMockManager {
         }
     }
 
-    /**
-     * 注册统一的请求修改路由处理器（Context版本）
-     * 避免多个 ".*" 路由相互覆盖
-     */
-    private static void registerUnifiedRouteHandler(BrowserContext context) {
-        if (unifiedRouteHandlerRegistered) {
-            logger.info("Unified route handler already registered");
-            return;
-        }
-
-        logger.info("========== Registering Unified Route Handler (Context) ==========");
-
-        context.route(".*", route -> {
-            try {
-                Request request = route.request();
-                String url = request.url();
-
-                // 检查是否有匹配的修改规则
-                for (RequestModificationRule rule : requestModificationRules) {
-                    if (url.contains(rule.endpoint)) {
-                        logger.debug("Applying modification for: {}", url);
-                        Route.ResumeOptions options = rule.interceptor.intercept(route, request);
-                        if (options != null) {
-                            route.resume(options);
-                        } else {
-                            route.resume();
-                        }
-                        return;
-                    }
-                }
-
-                // 没有匹配的规则，正常继续
-                route.resume();
-            } catch (Exception e) {
-                logger.error("Error in unified route handler", e);
-                try {
-                    route.resume();
-                } catch (Exception ex) {
-                    logger.error("Failed to resume route", ex);
-                }
-            }
-        });
-
-        unifiedRouteHandlerRegistered = true;
-        logger.info("Unified route handler registered successfully");
-    }
-
-    /**
-     * 注册统一的请求修改路由处理器（Page版本）
-     * 避免多个 ".*" 路由相互覆盖
-     */
-    private static void registerUnifiedRouteHandler(Page page) {
-        if (unifiedPageRouteHandlerRegistered) {
-            logger.info("Unified route handler already registered for page");
-            return;
-        }
-
-        logger.info("========== Registering Unified Route Handler (Page) ==========");
-
-        page.route(".*", route -> {
-            try {
-                Request request = route.request();
-                String url = request.url();
-
-                // 检查是否有匹配的修改规则
-                for (RequestModificationRule rule : pageRequestModificationRules) {
-                    if (url.contains(rule.endpoint)) {
-                        logger.debug("Applying modification for: {}", url);
-                        Route.ResumeOptions options = rule.interceptor.intercept(route, request);
-                        if (options != null) {
-                            route.resume(options);
-                        } else {
-                            route.resume();
-                        }
-                        return;
-                    }
-                }
-
-                // 没有匹配的规则，正常继续
-                route.resume();
-            } catch (Exception e) {
-                logger.error("Error in unified route handler (page)", e);
-                try {
-                    route.resume();
-                } catch (Exception ex) {
-                    logger.error("Failed to resume route", ex);
-                }
-            }
-        });
-
-        unifiedPageRouteHandlerRegistered = true;
-        logger.info("Unified route handler registered successfully for page");
-    }
-
-    /**
-     * 添加请求修改规则（Context版本）
-     */
-    private static void addRequestModificationRule(String endpoint, RequestInterceptor interceptor) {
-        requestModificationRules.add(new RequestModificationRule(endpoint, interceptor));
-        logger.info("Added request modification rule for endpoint: {}", endpoint);
-    }
-
-    /**
-     * 添加请求修改规则（Page版本）
-     */
-    private static void addRequestModificationRuleForPage(String endpoint, RequestInterceptor interceptor) {
-        pageRequestModificationRules.add(new RequestModificationRule(endpoint, interceptor));
-        logger.info("Added request modification rule for page endpoint: {}", endpoint);
-    }
-
-    /**
-     * 打印请求修改的详细信息
-     *
-     * @param request 原始请求
-     * @param options 修改后的 ResumeOptions
-     * @param modificationType 修改类型（如 "修改 HTTP Method", "修改请求头" 等）
-     * @param modifiedMethod 修改后的方法（可为 null）
-     * @param modifiedHeaders 修改后的 headers（可为 null）
-     * @param modifiedBody 修改后的 body（可为 null）
-     */
-    private static void printRequestModificationInfo(Request request, Route.ResumeOptions options, String modificationType,
-                                                       String modifiedMethod, Map<String, String> modifiedHeaders, String modifiedBody) {
-        logger.info("========================================");
-        logger.info("Modifying: {}", modificationType);
-        logger.info("========================================");
-        logger.info("[Original Request]");
-        logger.info("   URL: {}", request.url());
-        logger.info("   Method: {}", request.method());
-        logger.info("   Headers: {}", formatHeaders(request.headers()));
-        logger.info("   Body: {}", formatBody(request.postData()));
-
-        logger.info("----------------------------------------");
-        logger.info("[Modified Request]");
-        logger.info("   Method: {}", modifiedMethod != null ? modifiedMethod : request.method());
-        logger.info("   Headers: {}", formatHeaders(modifiedHeaders != null ? modifiedHeaders : request.headers()));
-        logger.info("   Body: {}", formatBody(modifiedBody != null ? modifiedBody : request.postData()));
-        logger.info("========================================");
-        logger.info("Request modified successfully!");
-        logger.info("========================================");
-    }
-
-    /**
-     * 打印请求修改的详细信息（简化版本，只传递 request 和 options）
-     *
-     * @param request 原始请求
-     * @param options 修改后的 ResumeOptions
-     * @param modificationType 修改类型（如 "修改 HTTP Method", "修改请求头" 等）
-     */
-    private static void printRequestModificationInfo(Request request, Route.ResumeOptions options, String modificationType) {
-        // 尝试从 options 中推断修改的值（ResumeOptions 没有 getter 方法）
-        // 这里只能打印原始请求信息，因为无法从 options 中获取修改后的值
-        logger.info("========================================");
-        logger.info("Modifying: {}", modificationType);
-        logger.info("========================================");
-        logger.info("[Original Request]");
-        logger.info("   URL: {}", request.url());
-        logger.info("   Method: {}", request.method());
-        logger.info("   Headers: {}", formatHeaders(request.headers()));
-        logger.info("   Body: {}", formatBody(request.postData()));
-
-        logger.info("----------------------------------------");
-        logger.info("[Request Modified]");
-        logger.info("   (Check interceptor code or network requests for details)");
-        logger.info("========================================");
-        logger.info("Request modified successfully!");
-        logger.info("========================================");
-    }
-
-    /**
-     * 格式化 headers 输出
-     */
-    private static String formatHeaders(Map<String, String> headers) {
-        if (headers == null || headers.isEmpty()) {
-            return "{}";
-        }
-        StringBuilder sb = new StringBuilder("{\n");
-        headers.forEach((key, value) -> sb.append(String.format("      %s: %s\n", key, value)));
-        sb.append("   }");
-        return sb.toString();
-    }
-
-    /**
-     * 格式化 body 输出
-     */
-    private static String formatBody(String body) {
-        if (body == null || body.isEmpty()) {
-            return "(empty)";
-        }
-        // 如果 body 过长，截断显示
-        int maxLength = 500;
-        if (body.length() > maxLength) {
-            return body.substring(0, maxLength) + "... (truncated, total " + body.length() + " chars)";
-        }
-        return body;
-    }
-
-    /**
-     * 修改 URL 查询参数
-     * @param url 原始 URL
-     * @param paramName 参数名
-     * @param paramValue 参数值（如果为 null，则删除该参数）
-     * @return 修改后的 URL
-     */
-    private static String modifyUrlQueryParam(String url, String paramName, String paramValue) {
-        if (url == null) {
-            return url;
-        }
-
-        try {
-            java.net.URI uri = java.net.URI.create(url);
-
-            // 解析查询参数
-            String query = uri.getQuery();
-            Map<String, String> params = new java.util.LinkedHashMap<>();
-
-            if (query != null && !query.isEmpty()) {
-                for (String param : query.split("&")) {
-                    String[] keyValue = param.split("=", 2);
-                    if (keyValue.length == 2) {
-                        String key = java.net.URLDecoder.decode(keyValue[0], "UTF-8");
-                        String value = java.net.URLDecoder.decode(keyValue[1], "UTF-8");
-                        params.put(key, value);
-                    }
-                }
-            }
-
-            // 修改或删除参数
-            if (paramValue == null) {
-                params.remove(paramName);
-            } else {
-                params.put(paramName, paramValue);
-            }
-
-            // 重建查询字符串
-            StringBuilder newQuery = new StringBuilder();
-            for (Map.Entry<String, String> entry : params.entrySet()) {
-                if (newQuery.length() > 0) {
-                    newQuery.append("&");
-                }
-                newQuery.append(java.net.URLEncoder.encode(entry.getKey(), "UTF-8"));
-                newQuery.append("=");
-                newQuery.append(java.net.URLEncoder.encode(entry.getValue(), "UTF-8"));
-            }
-
-            // 构建新 URL
-            java.net.URI newUri = new java.net.URI(
-                uri.getScheme(),
-                uri.getAuthority(),
-                uri.getPath(),
-                newQuery.length() > 0 ? newQuery.toString() : null,
-                uri.getFragment()
-            );
-
-            return newUri.toString();
-        } catch (Exception e) {
-            logger.warn("Failed to modify URL query param: {} = {}, error: {}", paramName, paramValue, e.getMessage());
-            // 降级处理：简单追加
-            String separator = url.contains("?") ? "&" : "?";
-            if (paramValue == null) {
-                return url; // 无法删除，返回原 URL
-            }
-            return url + separator + paramName + "=" + paramValue;
-        }
-    }
 }
