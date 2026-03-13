@@ -3,23 +3,26 @@ package com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.PathNotFoundException;
-import com.microsoft.playwright.*;
+import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Request;
+import com.microsoft.playwright.Response;
 import net.serenitybdd.core.Serenity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.greaterThanOrEqualTo;
-import static org.hamcrest.Matchers.lessThanOrEqualTo;
 
 /**
  * Real API Monitor - 实时监控API响应（企业级解决方案）
+ *
  * 功能：
  * 1. 实时监控API请求和响应
  * 2. 记录API调用历史（包括真实的响应状态码、响应时间等）
@@ -31,78 +34,13 @@ import static org.hamcrest.Matchers.lessThanOrEqualTo;
  * 8. 支持多种监控模式配置
  * 9. 所有监控结果（成功或失败）都会自动记录到Serenity报告
  *
- * 使用方式（推荐使用Builder模式）：
+ * 详细使用方式请参考: RealApiMonitor_Usage.md
  *
- * 【推荐】Builder模式 - 简单验证（仅状态码）：
+ * 简单示例：
  *   RealApiMonitor.with(context)
  *       .monitorApi(".*auth/login.*", 200)
- *       .monitorApi(".*api/users.*", 200)
  *       .build();
- *   RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
- *
- * 【推荐】Builder模式 - 自动停止监控：
- *   RealApiMonitor.with(context)
- *       .monitorApi(".*auth/login.*", 200)
- *       .monitorApi(".*api/users.*", 200)
- *       .stopAfterSeconds(10)  // 10秒后停止
- *       .build();
- *   RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
- *
- * 【推荐】Builder模式 - 检测到API后停止（带超时验证）：
- *   RealApiMonitor.with(context)
- *       .monitorApi(".*auth/login.*", 200)
- *       .stopAfterApi(".*auth/login.*", 1, 10)  // 10秒内必须检测到1次登录API
- *       .build();
- *   RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
- *
- * 【高级】Builder模式 - 多维度验证：
- *   RealApiMonitor.with(context)
- *       .expectApi(ApiExpectation.forUrl(".*auth/login.*")
- *           .statusCode(200)
- *           .responseTimeLessThan(1000)
- *           .responseBodyContains("success"))
- *       .expectApi(ApiExpectation.forUrl(".*api/users.*")
- *           .statusCode(200)
- *           .responseTimeLessThan(500))
- *       .build();
- *   RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
- *
- * 【完整Response内容验证】：
- *   // 完全匹配
- *   RealApiMonitor.with(context)
- *       .expectApi(ApiExpectation.forUrl(".*auth/login.*")
- *           .responseBodyEquals("{\"status\":\"success\",\"token\":\"abc123\"}"))
- *       .build();
- *
- *   // 正则匹配
- *   RealApiMonitor.with(context)
- *       .expectApi(ApiExpectation.forUrl(".*auth/login.*")
- *           .responseBodyMatches(".*\"token\":\"[^\"]+\".*"))
- *       .build();
- *
- * 【简化】单API监控验证（仅状态码）：
- *   monitorAndVerify(context, ".*auth/login.*", 200);
- *
- * 【高级】单API多维度验证：
- *   monitorWithExpectation(context, ApiExpectation.forUrl(".*auth/login.*")
- *       .statusCode(200)
- *       .responseTimeLessThan(1000)
- *       .responseBodyContains("token"));
- *
- * 【灵活】只监控不验证：
- *   startMonitoring(context, ".*api/.*");
- *
- * 【停止监控】：
- *   stopMonitoring(context);  // 停止所有监控
- *   stopMonitoringAfterSeconds(context, 10);  // 10秒后停止监控
- *   stopMonitoringAfterSeconds(context, 10, ".*auth/login.*");  // 10秒内必须检测到auth/login
- *   stopMonitoringAfterApi(context, ".*auth/login.*", 1);  // 检测到1次登录API后停止
- *   stopMonitoringAfterApi(context, ".*auth/login.*", 1, 10);  // 10秒内必须检测到1次登录API
- *   RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告（重要！）
- *
- * 【记录API监控结果】：
- *   logApiMonitoringResult();  // 记录API监控结果到Serenity报告（推荐，必须调用）
- *   assertThatApiMonitoring();  // 断言API监控结果，失败则抛出AssertionError（适用于exception场景）
+ *   RealApiMonitor.logApiMonitoringResult();
  */
 public class RealApiMonitor {
 
@@ -157,33 +95,8 @@ public class RealApiMonitor {
 
     /**
      * 【推荐】使用Builder模式配置API监控
-     *
      * @param context Playwright BrowserContext对象
      * @return ApiMonitorBuilder对象，用于链式调用
-     *
-     * 示例：
-     * RealApiMonitor.with(context)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .monitorApi(".*api/users.*", 200)
-     *     .build();
-     * 
-     * 示例：自动停止监控
-     * RealApiMonitor.with(context)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .stopAfterSeconds(10)  // 10秒后自动停止
-     *     .build();
-     * 
-     * 示例：检测到API后停止
-     * RealApiMonitor.with(context)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .stopAfterApi(".*auth/login.*", 1)  // 检测到1次登录API后停止
-     *     .build();
-     *
-     * 示例：检测到API后停止（带超时验证）
-     * RealApiMonitor.with(context)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .stopAfterApi(".*auth/login.*", 1, 10)  // 10秒内必须检测到1次登录API，否则报错
-     *     .build();
      */
     public static ApiMonitorBuilder with(BrowserContext context) {
         return new ApiMonitorBuilder(context);
@@ -191,30 +104,18 @@ public class RealApiMonitor {
 
     /**
      * 【推荐】使用Builder模式配置API监控（Page版本）
-     *
      * @param page Playwright Page对象
      * @return ApiMonitorBuilder对象，用于链式调用
-     *
-     * 示例：
-     * RealApiMonitor.with(page)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .stopAfterSeconds(10)
-     *     .build();
      */
     public static ApiMonitorBuilder with(Page page) {
         return new ApiMonitorBuilder(page);
     }
 
     /**
-     * 【简化】监控单个API并实时验证 - 一行代码搞定！
-     * 自动清空历史、启用验证、设置期望、开始监控
-     *
+     * 【简化】监控单个API并实时验证
      * @param context Playwright BrowserContext对象
-     * @param endpoint API endpoint（如 "/api/users"）
-     * @param expectedStatusCode 期望的状态码（如 200）
-     *
-     * 示例：
-     * monitorAndVerify(context, "/api/users", 200);
+     * @param endpoint API endpoint
+     * @param expectedStatusCode 期望的状态码
      */
     public static void monitorAndVerify(BrowserContext context, String endpoint, int expectedStatusCode) {
         logger.info("========== Starting API monitoring with real-time verification ==========");
@@ -230,20 +131,8 @@ public class RealApiMonitor {
 
     /**
      * 【简化】监控多个API并实时验证 - 批量设置
-     *
      * @param context Playwright BrowserContext对象
-     * @param expectations API期望映射（URL模式 -> 期望状态码，支持普通URL或正则）
-     *
-     * 示例：
-     * monitorMultiple(context, Map.of(
-     *     ".*api/users.*", 200,
-     *     ".*api/products.*", 200
-     * ));
-     * // 或使用普通URL
-     * monitorMultiple(context, Map.of(
-     *     "/api/users", 200,
-     *     "/api/products", 200
-     * ));
+     * @param expectations API期望映射（URL模式 -> 期望状态码）
      */
     public static void monitorMultiple(BrowserContext context, Map<String, Integer> expectations) {
         logger.info("========== Starting multiple APIs monitoring with real-time verification ==========");
@@ -262,15 +151,9 @@ public class RealApiMonitor {
     }
 
     /**
-     * 【灵活】只监控API，不自动验证 - 灵活手动验证
-     *
+     * 【灵活】只监控API，不自动验证
      * @param context Playwright BrowserContext对象
-     * @param endpoint API endpoint（如 "/api/users"）
-     *
-     * 示例：
-     * startMonitoring(context, "/api/users");
-     * // ... 执行操作
-     * verifyStatus("/api/users", 200); // 手动验证
+     * @param endpoint API endpoint
      */
     public static void startMonitoring(BrowserContext context, String endpoint) {
         logger.info("========== Starting API monitoring (without automatic verification) ==========");
@@ -281,13 +164,7 @@ public class RealApiMonitor {
 
     /**
      * 【灵活】监控所有API响应
-     *
      * @param context Playwright BrowserContext对象
-     *
-     * 示例：
-     * startMonitoringAll(context);
-     * // ... 执行操作
-     * printAllCapturedApis(); // 查看所有捕获的API
      */
     public static void startMonitoringAll(BrowserContext context) {
         logger.info("========== Starting full API monitoring (all APIs) ==========");
@@ -297,16 +174,8 @@ public class RealApiMonitor {
 
     /**
      * 【高级】监控单个API并进行多维度实时验证
-     * 支持验证状态码、响应时间、响应内容等
-     *
      * @param context Playwright BrowserContext对象
      * @param expectation API期望对象
-     *
-     * 示例：
-     * monitorWithExpectation(context, ApiExpectation.forUrl(".*auth/login.*")
-     *     .statusCode(200)
-     *     .responseTimeLessThan(1000)
-     *     .responseBodyContains("token"));
      */
     public static void monitorWithExpectation(BrowserContext context, ApiExpectation expectation) {
         logger.info("========== Starting API monitoring with multi-dimension verification ==========");
@@ -321,15 +190,8 @@ public class RealApiMonitor {
 
     /**
      * 【高级】监控多个API并进行多维度实时验证
-     *
      * @param context Playwright BrowserContext对象
      * @param expectations API期望对象列表
-     *
-     * 示例：
-     * monitorWithExpectations(context, List.of(
-     *     ApiExpectation.forUrl(".*auth/login.*").statusCode(200).responseTimeLessThan(1000),
-     *     ApiExpectation.forUrl(".*api/users.*").statusCode(200).responseBodyContains("data")
-     * ));
      */
     public static void monitorWithExpectations(BrowserContext context, List<ApiExpectation> expectations) {
         logger.info("========== Starting multiple APIs monitoring with multi-dimension verification ==========");
@@ -351,16 +213,8 @@ public class RealApiMonitor {
 
     /**
      * 将普通URL模式转换为正则表达式
-     * 如果URL已经是正则表达式（包含.*、\\d等），则原样返回
-     * 否则自动添加.*前缀和后缀进行灵活匹配
-     *
      * @param urlPattern URL模式（普通URL或正则表达式）
      * @return 正则表达式模式
-     *
-     * 示例：
-     * - "/api/users" -> ".*api/users.*"
-     * - "api/users" -> ".*api/users.*"
-     * - ".*api/.*" -> ".*api/.*" (已经是正则，不转换)
      */
     private static String toRegexPattern(String urlPattern) {
         if (urlPattern == null || urlPattern.isEmpty()) {
@@ -469,13 +323,12 @@ public class RealApiMonitor {
         private final int statusCode;
         private final Map<String, String> responseHeaders;
         private final Object responseBody;
-        private final long responseTimeMs;
         private final boolean isMocked;
 
         public ApiCallRecord(String requestId, String url, String method, long timestamp,
                            Map<String, String> requestHeaders, Object requestBody,
                            int statusCode, Map<String, String> responseHeaders,
-                           Object responseBody, long responseTimeMs, boolean isMocked) {
+                           Object responseBody, boolean isMocked) {
             this.requestId = requestId;
             this.url = url;
             this.method = method;
@@ -485,10 +338,8 @@ public class RealApiMonitor {
             this.statusCode = statusCode;
             this.responseHeaders = responseHeaders;
             this.responseBody = responseBody;
-            this.responseTimeMs = responseTimeMs;
             this.isMocked = isMocked;
         }
-
         public String getRequestId() { return requestId; }
         public String getUrl() { return url; }
         public String getMethod() { return method; }
@@ -498,13 +349,12 @@ public class RealApiMonitor {
         public int getStatusCode() { return statusCode; }
         public Map<String, String> getResponseHeaders() { return responseHeaders; }
         public Object getResponseBody() { return responseBody; }
-        public long getResponseTimeMs() { return responseTimeMs; }
         public boolean isMocked() { return isMocked; }
         
         @Override
         public String toString() {
-            return String.format("ApiCallRecord{url='%s', method='%s', statusCode=%d, responseTime=%dms}",
-                    url, method, statusCode, responseTimeMs);
+            return String.format("ApiCallRecord{url='%s', method='%s', statusCode=%d}",
+                    url, method, statusCode);
         }
     }
     
@@ -513,7 +363,95 @@ public class RealApiMonitor {
      */
     @FunctionalInterface
     public interface ResponseListener {
-        void onResponse(Response response, Request request, long responseTimeMs);
+        void onResponse(Response response, Request request);
+    }
+
+    // ==================== 数据类（用于返回值） ====================
+
+    /** API监控存储器 */
+    public static class ApiMonitorStore {
+        private static final Map<String, List<ApiCallRecord>> GLOBAL_STORE = new ConcurrentHashMap<>();
+        private final Map<String, List<ApiCallRecord>> localStore = new ConcurrentHashMap<>();
+        private final String endpoint;
+
+        public ApiMonitorStore(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
+        /** 添加记录 */
+        void add(ApiCallRecord record) {
+            String key = extractEndpoint(record.getUrl());
+            localStore.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(record);
+            GLOBAL_STORE.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(record);
+        }
+
+        /** 获取指定endpoint的所有记录 */
+        public List<ApiCallRecord> getByEndpoint(String endpointKey) {
+            return localStore.getOrDefault(endpointKey, new ArrayList<>());
+        }
+
+        /** 获取指定endpoint的最后一条记录 */
+        public ApiCallRecord getLast(String endpointKey) {
+            List<ApiCallRecord> list = localStore.get(endpointKey);
+            return (list != null && !list.isEmpty()) ? list.get(list.size() - 1) : null;
+        }
+
+        /** 获取当前endpoint的最后一条记录 */
+        public ApiCallRecord getLast() {
+            return getLast(endpoint);
+        }
+
+        /** 获取所有记录 */
+        public List<ApiCallRecord> getAll() {
+            List<ApiCallRecord> all = new ArrayList<>();
+            localStore.values().forEach(all::addAll);
+            return all;
+        }
+
+        /** 获取所有数据Map */
+        public Map<String, List<ApiCallRecord>> toMap() {
+            return new HashMap<>(localStore);
+        }
+
+        /** 清空本地存储 */
+        public void clear() {
+            localStore.clear();
+        }
+
+        /** 清空全局存储 */
+        public static void clearGlobal() {
+            GLOBAL_STORE.clear();
+        }
+
+        /** 获取全局存储 */
+        public static Map<String, List<ApiCallRecord>> getGlobalStore() {
+            return new HashMap<>(GLOBAL_STORE);
+        }
+
+        private String extractEndpoint(String url) {
+            if (url == null) return "";
+            int queryIndex = url.indexOf('?');
+            if (queryIndex > 0) {
+                url = url.substring(0, queryIndex);
+            }
+            int lastSlash = url.lastIndexOf('/');
+            return lastSlash >= 0 ? url.substring(lastSlash) : url;
+        }
+    }
+
+    /** 格式化Headers为JSON字符串 */
+    private static String formatHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) {
+            return "{}";
+        }
+        try {
+            com.google.gson.Gson gson = new com.google.gson.GsonBuilder().setPrettyPrinting().create();
+            com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+            headers.forEach(json::addProperty);
+            return gson.toJson(json);
+        } catch (Exception e) {
+            return headers.toString();
+        }
     }
     
     /**
@@ -548,7 +486,7 @@ public class RealApiMonitor {
         contextMonitoringStopped.put(context, false);
 
         // 添加响应监听器
-        ResponseListener responseListener = (response, request, responseTimeMs) -> {
+        ResponseListener responseListener = (response, request) -> {
             responseCount[0]++;
             boolean matches = endpoint.isEmpty() || response.url().contains(endpoint);
 
@@ -580,17 +518,28 @@ public class RealApiMonitor {
                     ApiCallRecord record = new ApiCallRecord(
                             requestId, response.url(), request.method(), System.currentTimeMillis(),
                             requestHeaders, requestBody, response.status(), responseHeaders,
-                            responseBody, responseTimeMs, false
+                            responseBody, false
                     );
 
                     apiCallHistory.add(record);
-                    logger.info("========== REAL API RESPONSE (BrowserContext) ==========");
-                    logger.info("Method: {} URL: {}", request.method(), response.url());
-                    logger.info("Status: {}", response.status());
-                    logger.info("Response Time: {}ms", responseTimeMs);
-                    logger.info("Response Headers: {}", responseHeaders);
-                    logger.info("Response Body: {}", responseBody != null ? responseBody : "[Cannot read body]");
-                    logger.info("========================================================");
+                    notifyStores(record);
+                    logger.info("========================================");
+                    logger.info("[API RESPONSE] {}", response.url());
+                    logger.info("========================================");
+                    // Request 信息
+                    logger.info("[Request Info]");
+                    logger.info("   URL: {}", request.url());
+                    logger.info("   Method: {}", request.method());
+                    logger.info("   Headers: {}", formatHeaders(requestHeaders));
+                    if (requestBody != null) {
+                        logger.info("   Body: {}", requestBody);
+                    }
+                    // Response 信息
+                    logger.info("[Response Info]");
+                    logger.info("   Status: {} {}", response.status(), response.statusText());
+                    logger.info("   Headers: {}", formatHeaders(responseHeaders));
+                    logger.info("   Body: {}", responseBody != null ? responseBody : "[Cannot read body]");
+                    logger.info("========================================");
                     logger.info(" Recorded API call: {} {} - Status: {}",
                             request.method(), response.url(), response.status());
 
@@ -629,19 +578,11 @@ public class RealApiMonitor {
             }
 
             LoggingConfigUtil.logDebugIfVerbose(logger, " onResponse event fired! URL: {}, Status: {}", response.url(), response.status());
-            // 使用Playwright API获取真实的响应时间
-            long responseTimeMs = 0;
-            try {
-                responseTimeMs = (long) response.request().timing().responseEnd;
-                LoggingConfigUtil.logDebugIfVerbose(logger, " Response timing for {}: {}ms", response.url(), responseTimeMs);
-            } catch (Exception e) {
-                logger.debug("Failed to get response timing for: {}", response.url());
-            }
 
             // 调用内部监听器
             for (ResponseListener rl : currentListeners) {
                 try {
-                    rl.onResponse(response, response.request(), responseTimeMs);
+                    rl.onResponse(response, response.request());
                 } catch (AssertionError e) {
                     // AssertionError 直接传播，让测试立即失败
                     throw e;
@@ -689,7 +630,7 @@ public class RealApiMonitor {
         pageMonitoringStopped.put(page, false);
 
         // 添加响应监听器
-        ResponseListener responseListener = (response, request, responseTimeMs) -> {
+        ResponseListener responseListener = (response, request) -> {
             responseCount[0]++;
             boolean matches = endpoint.isEmpty() || response.url().contains(endpoint);
 
@@ -721,17 +662,28 @@ public class RealApiMonitor {
                     ApiCallRecord record = new ApiCallRecord(
                             requestId, response.url(), request.method(), System.currentTimeMillis(),
                             requestHeaders, requestBody, response.status(), responseHeaders,
-                            responseBody, responseTimeMs, false
+                            responseBody, false
                     );
 
                     apiCallHistory.add(record);
-                    logger.info("========== REAL API RESPONSE (Page) ==========");
-                    logger.info("Method: {} URL: {}", request.method(), response.url());
-                    logger.info("Status: {}", response.status());
-                    logger.info("Response Time: {}ms", responseTimeMs);
-                    logger.info("Response Headers: {}", responseHeaders);
-                    logger.info("Response Body: {}", responseBody != null ? responseBody : "[Cannot read body]");
-                    logger.info("================================================");
+                    notifyStores(record);
+                    logger.info("========================================");
+                    logger.info("[API RESPONSE] {}", response.url());
+                    logger.info("========================================");
+                    // Request 信息
+                    logger.info("[Request Info]");
+                    logger.info("   URL: {}", request.url());
+                    logger.info("   Method: {}", request.method());
+                    logger.info("   Headers: {}", formatHeaders(requestHeaders));
+                    if (requestBody != null) {
+                        logger.info("   Body: {}", requestBody);
+                    }
+                    // Response 信息
+                    logger.info("[Response Info]");
+                    logger.info("   Status: {} {}", response.status(), response.statusText());
+                    logger.info("   Headers: {}", formatHeaders(responseHeaders));
+                    logger.info("   Body: {}", responseBody != null ? responseBody : "[Cannot read body]");
+                    logger.info("========================================");
                     logger.info(" Recorded API call: {} {} - Status: {}",
                             request.method(), response.url(), response.status());
 
@@ -760,18 +712,12 @@ public class RealApiMonitor {
 
             LoggingConfigUtil.logDebugIfVerbose(logger, " onResponse event fired! URL: {}, Status: {}", response.url(), response.status());
             // 使用Playwright API获取真实的响应时间
-            long responseTimeMs = 0;
-            try {
-                responseTimeMs = (long) response.request().timing().responseEnd;
-                LoggingConfigUtil.logDebugIfVerbose(logger, " Response timing for {}: {}ms", response.url(), responseTimeMs);
-            } catch (Exception e) {
-                logger.debug("Failed to get response timing for: {}", response.url());
-            }
+            LoggingConfigUtil.logDebugIfVerbose(logger, " onResponse event fired! URL: {}, Status: {}", response.url(), response.status());
 
             // 调用监听器
             if (listener != null) {
                 try {
-                    listener.onResponse(response, response.request(), responseTimeMs);
+                    listener.onResponse(response, response.request());
                 } catch (AssertionError e) {
                     // AssertionError 直接传播，让测试立即失败
                     throw e;
@@ -896,42 +842,19 @@ public class RealApiMonitor {
     }
 
     /**
-     * 在指定秒数后停止监控（企业级功能）
-     *
-     * 注意：此方法只是按时间停止，不会验证是否捕获到API。
-     * 如需验证是否捕获到目标API，请使用 stopMonitoringAfterSeconds(context, seconds, urlPattern)
-     *
+     * 在指定秒数后停止监控
      * @param context Playwright BrowserContext对象
      * @param seconds 秒数
-     *
-     * 示例：
-     * startMonitoring(context, ".*api/.*");
-     * // ... 执行操作
-     * stopMonitoringAfterSeconds(context, 10);  // 10秒后停止
-     * RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
      */
     public static void stopMonitoringAfterSeconds(BrowserContext context, int seconds) {
         stopMonitoringAfterSeconds(context, seconds, null);
     }
 
     /**
-     * 在指定秒数后停止监控，并验证是否捕获到目标API（企业级功能）
-     *
-     * 行为：
-     * 1. 如果在指定秒数内检测到目标API，立即停止监控
-     * 2. 如果在指定秒数内没有检测到目标API，记录警告信息
-     *
-     * 注意：需要在主线程中调用 logApiMonitoringResult() 来记录结果到Serenity报告
-     *
+     * 在指定秒数后停止监控，并验证是否捕获到目标API
      * @param context Playwright BrowserContext对象
      * @param seconds 秒数
-     * @param urlPattern 目标API的URL模式（支持正则），如果为null则只按时间停止
-     *
-     * 示例：
-     * startMonitoring(context, "/api/users");
-     * // ... 执行操作
-     * stopMonitoringAfterSeconds(context, 10, "/api/auth/login");  // 10秒内必须捕获到auth/login
-     * RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
+     * @param endpoint 目标API的URL模式，如果为null则只按时间停止
      */
     public static void stopMonitoringAfterSeconds(BrowserContext context, int seconds, String endpoint) {
         if (endpoint != null) {
@@ -1053,42 +976,21 @@ public class RealApiMonitor {
     }
 
     /**
-     * 检测到指定API后停止监控（企业级功能）
-     *
+     * 检测到指定API后停止监控
      * @param context Playwright BrowserContext对象
      * @param endpoint API endpoint
      * @param expectedCount 期望检测到的API调用次数
-     *
-     * 示例：
-     * startMonitoring(context, "/api/users");
-     * // ... 执行操作
-     * stopMonitoringAfterApi(context, "/api/auth/login", 1);  // 检测到1次登录API后停止
      */
     public static void stopMonitoringAfterApi(BrowserContext context, String endpoint, int expectedCount) {
         stopMonitoringAfterApi(context, endpoint, expectedCount, 0);
     }
 
     /**
-     * 检测到指定API后停止监控，并支持超时验证（企业级功能）
-     *
-     * 行为：
-     * 1. 如果在指定秒数内检测到目标API，立即停止监控
-     * 2. 如果在指定秒数内没有检测到目标API，记录警告信息
-     * 3. 如果 timeoutSeconds 为 0，则不设置超时，只检测API
-     *
-     * 注意：需要在主线程中调用 logApiMonitoringResult() 来记录结果到Serenity报告
-     *
+     * 检测到指定API后停止监控，支持超时验证
      * @param context Playwright BrowserContext对象
      * @param endpoint API endpoint
      * @param expectedCount 期望检测到的API调用次数
      * @param timeoutSeconds 超时秒数（0表示不设置超时）
-     *
-     * 示例：
-     * startMonitoring(context, "/api/users");
-     * // ... 执行操作
-     * // 10秒内必须检测到1次登录API
-     * stopMonitoringAfterApi(context, "/api/auth/login", 1, 10);
-     * RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
      */
     public static void stopMonitoringAfterApi(BrowserContext context, String endpoint, int expectedCount, int timeoutSeconds) {
         logger.info("Will stop monitoring after detecting {} API(s) matching endpoint: {}", expectedCount, endpoint);
@@ -1106,7 +1008,7 @@ public class RealApiMonitor {
             private volatile int detectedCount = 0;
 
             @Override
-            public void onResponse(Response response, Request request, long responseTimeMs) {
+            public void onResponse(Response response, Request request) {
                 if (shouldStop[0]) {
                     return;
                 }
@@ -1228,17 +1130,7 @@ public class RealApiMonitor {
 
     /**
      * 【推荐】记录API监控结果到Serenity报告
-     * 这个方法会检查是否捕获到了期望的API，并记录结果到Serenity报告
-     * 
-     * 建议在测试步骤结束时调用此方法，确保监控结果被记录到报告中
-     * 
-     * 示例：
-     * RealApiMonitor.with(context)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .stopAfterSeconds(3)
-     *     .build();
-     * // ... 执行测试操作 ...
-     * RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
+     * 建议在测试步骤结束时调用此方法
      */
     public static void logApiMonitoringResult() {
         logApiMonitoringResult(false);
@@ -1246,20 +1138,8 @@ public class RealApiMonitor {
 
     /**
      * 【推荐】断言API监控结果，如果失败则抛出异常
-     * 这个方法会检查是否捕获到了期望的API，并记录结果到Serenity报告
-     * 如果API监控失败（未捕获到期望API），会抛出AssertionError
-     * 
-     * 适用于测试exception场景，确保API在指定时间内被调用
-     * 
-     * 示例：
-     * RealApiMonitor.with(context)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .stopAfterSeconds(10)
-     *     .build();
-     * // ... 执行测试操作 ...
-     * RealApiMonitor.assertThatApiMonitoring();  // 断言API监控结果，失败则抛出异常
-     * 
-     * @throws AssertionError 如果API监控失败（未捕获到期望API）
+     * 适用于测试exception场景
+     * @throws AssertionError 如果API监控失败
      */
     public static void assertThatApiMonitoring() {
         logApiMonitoringResult(true);
@@ -1339,8 +1219,7 @@ public class RealApiMonitor {
                     .map(r -> r.getMethod() + " " + r.getUrl())
                     .collect(Collectors.toList())
             );
-            logger.error(errorMsg);
-            throw new AssertionError(errorMsg);
+            assertThat(errorMsg, foundExpected, equalTo(true));
         }
     }
 
@@ -1573,7 +1452,6 @@ public class RealApiMonitor {
                     json.append("      \"method\": \"").append(record.getMethod()).append("\",\n");
                     json.append("      \"url\": \"").append(escapeJson(record.getUrl())).append("\",\n");
                     json.append("      \"statusCode\": ").append(record.getStatusCode()).append(",\n");
-                    json.append("      \"responseTimeMs\": ").append(record.getResponseTimeMs()).append(",\n");
                     json.append("      \"matched\": ").append(matched).append("\n");
                     json.append("    }").append(i < apiCallHistory.size() - 1 ? "," : "").append("\n");
                 }
@@ -1612,8 +1490,7 @@ public class RealApiMonitor {
                     json.append("      \"type\": \"").append(record.isMocked() ? "Mock" : "Real").append("\",\n");
                     json.append("      \"url\": \"").append(escapeJson(record.getUrl())).append("\",\n");
                     json.append("      \"method\": \"").append(record.getMethod()).append("\",\n");
-                    json.append("      \"statusCode\": ").append(record.getStatusCode()).append(",\n");
-                    json.append("      \"responseTimeMs\": ").append(record.getResponseTimeMs()).append("\n");
+                    json.append("      \"statusCode\": ").append(record.getStatusCode()).append("\n");
                     json.append("    }").append(i < apiCallHistory.size() - 1 ? "," : "").append("\n");
                 }
                 json.append("  ]\n");
@@ -1669,8 +1546,7 @@ public class RealApiMonitor {
                         json.append("      \"matched\": {\n");
                         json.append("        \"type\": \"").append(matchedRecord.isMocked() ? "Mock" : "Real").append("\",\n");
                         json.append("        \"actualUrl\": \"").append(escapeJson(matchedRecord.getUrl())).append("\",\n");
-                        json.append("        \"statusCode\": ").append(matchedRecord.getStatusCode()).append(",\n");
-                        json.append("        \"responseTimeMs\": ").append(matchedRecord.getResponseTimeMs()).append("\n");
+                        json.append("        \"statusCode\": ").append(matchedRecord.getStatusCode()).append("\n");
                         json.append("      }\n");
                     } else {
                         json.append("      \"matched\": null\n");
@@ -1764,9 +1640,9 @@ public class RealApiMonitor {
         } else {
             for (int i = 0; i < apiCallHistory.size(); i++) {
                 ApiCallRecord record = apiCallHistory.get(i);
-                logger.info("#{} {} {} - Status: {} - Time: {}ms",
+                logger.info("#{} {} {} - Status: {}",
                         i + 1, record.getMethod(), record.getUrl(), 
-                        record.getStatusCode(), record.getResponseTimeMs());
+                        record.getStatusCode());
             }
         }
         
@@ -1811,13 +1687,8 @@ public class RealApiMonitor {
                         .findFirst()
                         .orElse(null);
                 if (sample != null) {
-                    logger.info("  - URL: {} | Count: {} | Last Status: {} | Avg Time: {}ms",
-                            url, count, sample.getStatusCode(), 
-                            apiCallHistory.stream()
-                                    .filter(r -> r.getUrl().equals(url))
-                                    .mapToLong(ApiCallRecord::getResponseTimeMs)
-                                    .average()
-                                    .orElse(0));
+                    logger.info("  - URL: {} | Count: {} | Last Status: {}",
+                            url, count, sample.getStatusCode());
                 }
             }
         }
@@ -1862,22 +1733,6 @@ public class RealApiMonitor {
 
     /**
      * API监控构建器 - 使用Builder模式配置API监控
-     *
-     * 示例用法（简单验证）：
-     * RealApiMonitor.with(context)
-     *     .monitorApi(".*auth/login.*", 200)
-     *     .monitorApi(".*api/users.*", 200)
-     *     .build();
-     *
-     * 示例用法（多维度验证）：
-     * RealApiMonitor.with(context)
-     *     .expectApi(ApiExpectation.forUrl(".*auth/login.*")
-     *         .statusCode(200)
-     *         .responseTimeLessThan(1000))
-     *     .expectApi(ApiExpectation.forUrl(".*api/users.*")
-     *         .statusCode(200)
-     *         .responseBodyContains("data"))
-     *     .build();
      */
     public static class ApiMonitorBuilder {
         private final BrowserContext context;
@@ -1948,23 +1803,8 @@ public class RealApiMonitor {
 
         /**
          * 是否排除静态资源（JS、CSS、图片等）
-         * 启用后，只会监控 API 请求，不会监控静态资源请求
-         *
-         * 静态资源包括：
-         * - JS 文件：*.js
-         * - CSS 文件：*.css
-         * - 图片：*.png, *.jpg, *.jpeg, *.gif, *.svg, *.ico
-         * - 字体：*.woff, *.woff2, *.ttf, *.eot
-         * - 其他：*.html, *.woff2, *.map 等
-         *
-         * @param exclude true表示排除静态资源，false表示不排除（默认false）
+         * @param exclude true表示排除静态资源
          * @return this构建器实例
-         *
-         * 示例：
-         * RealApiMonitor.with(context)
-         *     .monitorApi(".*rest/.*", 200)
-         *     .excludeStaticResources(true)  // 排除静态资源
-         *     .build();
          */
         public ApiMonitorBuilder excludeStaticResources(boolean exclude) {
             this.excludeStaticResources = exclude;
@@ -1972,19 +1812,9 @@ public class RealApiMonitor {
         }
 
         /**
-         * 在指定秒数后停止监控（企业级功能）
-         *
-         * 注意：需要在主线程中调用 logApiMonitoringResult() 来记录结果到Serenity报告
-         *
+         * 在指定秒数后停止监控
          * @param seconds 秒数
          * @return this构建器实例
-         *
-         * 示例：
-         * RealApiMonitor.with(context)
-         *     .monitorApi(".*api/.*", 200)
-         *     .stopAfterSeconds(10)  // 10秒后自动停止
-         *     .build();
-         * RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
          */
         public ApiMonitorBuilder stopAfterSeconds(int seconds) {
             this.stopAfterSeconds = seconds;
@@ -1992,17 +1822,10 @@ public class RealApiMonitor {
         }
 
         /**
-         * 检测到指定API后停止监控（企业级功能）
-         *
-         * @param endpoint URL匹配模式（支持普通URL或正则表达式）
+         * 检测到指定API后停止监控
+         * @param endpoint URL匹配模式
          * @param expectedCount 期望检测到的API调用次数
          * @return this构建器实例
-         *
-         * 示例：
-         * RealApiMonitor.with(context)
-         *     .monitorApi(".*api/.*", 200)
-         *     .stopAfterApi(".*auth/login.*", 1)  // 检测到1次登录API后停止
-         *     .build();
          */
         public ApiMonitorBuilder stopAfterApi(String endpoint, int expectedCount) {
             stopAfterApiMap.put(endpoint, expectedCount);
@@ -2010,26 +1833,11 @@ public class RealApiMonitor {
         }
 
         /**
-         * 检测到指定API后停止监控，并设置超时验证（企业级功能）
-         *
-         * 注意：需要在主线程中调用 logApiMonitoringResult() 来记录结果到Serenity报告
-         *
-         * 行为：
-         * 1. 如果在指定秒数内检测到目标API，立即停止监控
-         * 2. 如果在指定秒数内没有检测到目标API，记录警告信息
-         * 3. 如果 timeoutSeconds 为 0，则不设置超时，只检测API
-         *
-         * @param endpoint URL匹配模式（支持普通URL或正则）
+         * 检测到指定API后停止监控，支持超时验证
+         * @param endpoint URL匹配模式
          * @param expectedCount 期望检测到的API调用次数
          * @param timeoutSeconds 超时秒数（0表示不设置超时）
          * @return this构建器实例
-         *
-         * 示例：
-         * RealApiMonitor.with(context)
-         *     .monitorApi(".*auth/login.*", 200)
-         *     .stopAfterApi(".*auth/login.*", 1, 10)  // 10秒内必须检测到1次登录API
-         *     .build();
-         * RealApiMonitor.logApiMonitoringResult();  // 记录结果到Serenity报告
          */
         public ApiMonitorBuilder stopAfterApi(String endpoint, int expectedCount, int timeoutSeconds) {
             stopAfterApiMap.put(endpoint, expectedCount);
@@ -2196,6 +2004,55 @@ public class RealApiMonitor {
 
             // 自动记录到Serenity报告
             RealApiMonitor.recordMonitoredApiTargets();
+            
+            // 自动记录监控结果到Serenity报告
+            RealApiMonitor.logApiMonitoringResult();
+        }
+
+        /**
+         * 构建并启动监控，返回存储对象
+         *
+         * @return ApiMonitorStore 存储请求/响应信息
+         */
+        public ApiMonitorStore buildWithStore() {
+            String primaryEndpoint = apiExpectations.isEmpty() ? "" : apiExpectations.keySet().iterator().next();
+            ApiMonitorStore store = new ApiMonitorStore(primaryEndpoint);
+
+            // 注册存储回调
+            RealApiMonitor.addStoreCallback(store);
+
+            // 调用原有的build逻辑
+            build();
+
+            return store;
+        }
+    }
+
+    // 存储回调列表
+    private static final List<ApiMonitorStore> activeStores = new CopyOnWriteArrayList<>();
+
+    /**
+     * 添加存储回调
+     */
+    private static void addStoreCallback(ApiMonitorStore store) {
+        activeStores.add(store);
+    }
+
+    /**
+     * 移除存储回调
+     */
+    public static void removeStoreCallback(ApiMonitorStore store) {
+        activeStores.remove(store);
+    }
+
+    // 在记录API调用时通知所有存储
+    private static void notifyStores(ApiCallRecord record) {
+        for (ApiMonitorStore store : activeStores) {
+            try {
+                store.add(record);
+            } catch (Exception e) {
+                logger.error("Error adding record to store", e);
+            }
         }
     }
 
@@ -2203,31 +2060,10 @@ public class RealApiMonitor {
 
     /**
      * API期望类 - 支持多维度验证
-     *
-     * 示例用法：
-     * ApiExpectation.forUrl(".*auth/login.*")
-     *     .statusCode(200)
-     *     .responseTimeLessThan(1000)
-     *     .responseBodyContains("token")  // 部分匹配
-     *     .responseHeaderContains("Content-Type", "application/json");
-     *
-     * 完整response内容验证：
-     * ApiExpectation.forUrl(".*auth/login.*")
-     *     .responseBodyEquals("{\"status\":\"success\",\"token\":\"abc123\"}")  // 完全匹配
-     *     .responseBodyMatches(".*\"token\":\"[^\"]+\".*")  // 正则匹配
-     *
-     * JSON Path验证：
-     * ApiExpectation.forUrl(".*auth/login.*")
-     *     .jsonPathEquals("$.status", "success")  // JSON path精确匹配
-     *     .jsonPathContains("$.data.users[0].name", "John")  // JSON path包含
-     *     .jsonPathMatches("$.email", ".*@example\\.com")  // JSON path正则匹配
-     *     .jsonPathIntEquals("$.count", 10)  // JSON path整数比较
-     *     .jsonPathBooleanEquals("$.success", true)  // JSON path布尔值比较
      */
     public static class ApiExpectation {
         private final String endpoint;
         private Integer expectedStatusCode;
-        private Long maxResponseTime;
         private String expectedResponseBodyContent;  // 部分匹配
         private String expectedResponseBodyExact;     // 完全匹配
         private String expectedResponseBodyRegex;     // 正则匹配
@@ -2280,17 +2116,6 @@ public class RealApiMonitor {
         }
 
         /**
-         * 设置期望的最大响应时间
-         *
-         * @param maxTimeMs 最大响应时间（毫秒）
-         * @return this
-         */
-        public ApiExpectation responseTimeLessThan(long maxTimeMs) {
-            this.maxResponseTime = maxTimeMs;
-            return this;
-        }
-
-        /**
          * 设置期望的响应体包含内容
          *
          * @param content 期望包含的内容
@@ -2331,13 +2156,8 @@ public class RealApiMonitor {
 
         /**
          * 设置期望的响应体正则表达式（正则匹配）
-         *
          * @param regex 正则表达式
          * @return this
-         *
-         * 示例：
-         * ApiExpectation.forUrl(".*auth/login.*")
-         *     .responseBodyMatches(".*\"token\":\"[^\"]+\".*");
          */
         public ApiExpectation responseBodyMatches(String regex) {
             this.expectedResponseBodyRegex = regex;
@@ -2346,15 +2166,9 @@ public class RealApiMonitor {
 
         /**
          * 设置JSON Path精确匹配
-         *
-         * @param jsonPath JSON Path表达式（如 "$.status", "$.data.users[0].name"）
+         * @param jsonPath JSON Path表达式
          * @param expectedValue 期望的值
          * @return this
-         *
-         * 示例：
-         * ApiExpectation.forUrl(".*auth/login.*")
-         *     .jsonPathEquals("$.status", "success")
-         *     .jsonPathEquals("$.data.user.id", "123");
          */
         public ApiExpectation jsonPathEquals(String jsonPath, Object expectedValue) {
             this.jsonPathEqualsMap.put(jsonPath, expectedValue);
@@ -2363,14 +2177,9 @@ public class RealApiMonitor {
 
         /**
          * 设置JSON Path包含匹配
-         *
          * @param jsonPath JSON Path表达式
          * @param expectedContent 期望包含的内容
          * @return this
-         *
-         * 示例：
-         * ApiExpectation.forUrl(".*api/products.*")
-         *     .jsonPathContains("$.data.products[0].description", "premium");
          */
         public ApiExpectation jsonPathContains(String jsonPath, String expectedContent) {
             this.jsonPathContainsMap.put(jsonPath, expectedContent);
@@ -2379,14 +2188,9 @@ public class RealApiMonitor {
 
         /**
          * 设置JSON Path正则表达式匹配
-         *
          * @param jsonPath JSON Path表达式
          * @param regex 期望的正则表达式
          * @return this
-         *
-         * 示例：
-         * ApiExpectation.forUrl(".*api/users.*")
-         *     .jsonPathMatches("$.data.email", ".*@example\\.com");
          */
         public ApiExpectation jsonPathMatches(String jsonPath, String regex) {
             this.jsonPathMatchesMap.put(jsonPath, regex);
@@ -2395,15 +2199,9 @@ public class RealApiMonitor {
 
         /**
          * 设置JSON Path整数精确匹配
-         *
          * @param jsonPath JSON Path表达式
          * @param expectedValue 期望的整数值
          * @return this
-         *
-         * 示例：
-         * ApiExpectation.forUrl(".*api/products.*")
-         *     .jsonPathIntEquals("$.data.count", 10)
-         *     .jsonPathIntEquals("$.data.total", 100);
          */
         public ApiExpectation jsonPathIntEquals(String jsonPath, int expectedValue) {
             this.jsonPathIntEqualsMap.put(jsonPath, expectedValue);
@@ -2412,15 +2210,9 @@ public class RealApiMonitor {
 
         /**
          * 设置JSON Path布尔值精确匹配
-         *
          * @param jsonPath JSON Path表达式
          * @param expectedValue 期望的布尔值
          * @return this
-         *
-         * 示例：
-         * ApiExpectation.forUrl(".*api/products.*")
-         *     .jsonPathBooleanEquals("$.data.success", true)
-         *     .jsonPathBooleanEquals("$.data.error", false);
          */
         public ApiExpectation jsonPathBooleanEquals(String jsonPath, boolean expectedValue) {
             this.jsonPathBooleanEqualsMap.put(jsonPath, expectedValue);
@@ -2442,17 +2234,13 @@ public class RealApiMonitor {
             if (expectedStatusCode != null) {
                 desc.append("Status=").append(expectedStatusCode);
             }
-            if (maxResponseTime != null) {
-                if (desc.length() > 0) desc.append(", ");
-                desc.append("Time<").append(maxResponseTime).append("ms");
-            }
             if (expectedResponseBodyContent != null) {
                 if (desc.length() > 0) desc.append(", ");
                 desc.append("Body contains '").append(expectedResponseBodyContent).append("'");
             }
             if (expectedResponseBodyExact != null) {
                 if (desc.length() > 0) desc.append(", ");
-                desc.append("Body equals '").append(truncate(expectedResponseBodyExact, 50)).append("'");
+                desc.append("Body equals '").append(expectedResponseBodyExact).append("'");
             }
             if (expectedResponseBodyRegex != null) {
                 if (desc.length() > 0) desc.append(", ");
@@ -2486,14 +2274,6 @@ public class RealApiMonitor {
         }
 
         /**
-         * 截断字符串
-         */
-        private String truncate(String str, int maxLength) {
-            if (str == null) return null;
-            return str.length() > maxLength ? str.substring(0, maxLength) + "..." : str;
-        }
-
-        /**
          * 验证API调用记录
          *
          * @param record API调用记录
@@ -2503,19 +2283,13 @@ public class RealApiMonitor {
             List<String> failures = new ArrayList<>();
 
             // 验证状态码
-            if (expectedStatusCode != null && record.getStatusCode() != expectedStatusCode) {
-                failures.add(String.format(
-                    "Status Code Mismatch: Expected %d, Actual %d",
-                    expectedStatusCode, record.getStatusCode()
-                ));
-            }
-
-            // 验证响应时间
-            if (maxResponseTime != null && record.getResponseTimeMs() > maxResponseTime) {
-                failures.add(String.format(
-                    "Response Time Exceeded: Expected <%dms, Actual %dms",
-                    maxResponseTime, record.getResponseTimeMs()
-                ));
+            if (expectedStatusCode != null) {
+                try {
+                    assertThat("Status Code Mismatch for " + record.getUrl(), 
+                               record.getStatusCode(), equalTo(expectedStatusCode));
+                } catch (AssertionError e) {
+                    failures.add(e.getMessage());
+                }
             }
 
             // 验证响应体内容
@@ -2804,16 +2578,14 @@ public class RealApiMonitor {
                     String.join("%n", failures),
                     String.valueOf(record.getResponseBody())
                 );
-                logger.error(errorMsg);
                 throw new AssertionError(errorMsg);
             }
 
             // 验证通过
-            logger.info(" API monitoring PASSED! URL: {}, Method: {}, Status: {}, Time: {}ms - ({})",
+            logger.info(" API monitoring PASSED! URL: {}, Method: {}, Status: {} - ({})",
                     record.getUrl(),
                     record.getMethod(),
                     record.getStatusCode(),
-                    record.getResponseTimeMs(),
                     getDescription());
         }
     }

@@ -72,13 +72,12 @@ public class ApiMonitorAndMockManager {
         private final int statusCode;
         private final Map<String, String> responseHeaders;
         private final Object responseBody;
-        private final long responseTimeMs;
         private final boolean isMocked;
         
         public ApiCallRecord(String requestId, String url, String method, long timestamp, 
                           Map<String, String> requestHeaders, Object requestBody, 
                           int statusCode, Map<String, String> responseHeaders, 
-                          Object responseBody, long responseTimeMs, boolean isMocked) {
+                          Object responseBody, boolean isMocked) {
             this.requestId = requestId;
             this.url = url;
             this.method = method;
@@ -88,7 +87,6 @@ public class ApiMonitorAndMockManager {
             this.statusCode = statusCode;
             this.responseHeaders = responseHeaders;
             this.responseBody = responseBody;
-            this.responseTimeMs = responseTimeMs;
             this.isMocked = isMocked;
         }
         
@@ -101,7 +99,6 @@ public class ApiMonitorAndMockManager {
         public int getStatusCode() { return statusCode; }
         public Map<String, String> getResponseHeaders() { return responseHeaders; }
         public Object getResponseBody() { return responseBody; }
-        public long getResponseTimeMs() { return responseTimeMs; }
         public boolean isMocked() { return isMocked; }
     }
     
@@ -740,7 +737,7 @@ public class ApiMonitorAndMockManager {
             
             ApiCallRecord record = new ApiCallRecord(
                 requestId, route.request().url(), route.request().method(), timestamp,
-                requestHeaders, requestBody, statusCode, responseHeaders, responseBody, 0, isMocked
+                requestHeaders, requestBody, statusCode, responseHeaders, responseBody, isMocked
             );
             
             apiCallHistory.add(record);
@@ -927,8 +924,7 @@ public class ApiMonitorAndMockManager {
                     json.append("      \"type\": \"").append(record.isMocked() ? "Mock" : "Real").append("\",\n");
                     json.append("      \"url\": \"").append(escapeJson(record.getUrl())).append("\",\n");
                     json.append("      \"method\": \"").append(record.getMethod()).append("\",\n");
-                    json.append("      \"statusCode\": ").append(record.getStatusCode()).append(",\n");
-                    json.append("      \"responseTimeMs\": ").append(record.getResponseTimeMs()).append("\n");
+                    json.append("      \"statusCode\": ").append(record.getStatusCode()).append("\n");
                     json.append("    }").append(i < apiCallHistory.size() - 1 ? "," : "").append("\n");
                 }
                 json.append("  ],\n");

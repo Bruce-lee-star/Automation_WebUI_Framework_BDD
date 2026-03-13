@@ -1,6 +1,7 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
@@ -13,15 +14,23 @@ import com.microsoft.playwright.Route;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 /**
  * 请求修改器 - 统一修改 HTTP 请求的 Body、Headers、QueryParams、Method
  *
  * 使用示例：
- * RequestModifier modification = new RequestModifier()
+ * ApiRequestModifier modification = new ApiRequestModifier()
  *     .body("{}")                                  // 完全替换 body
  *     .modifyBodyField("userId", "123")            // 设置/修改单个字段
  *     .modifyBodyField("user.name", "John")        // 设置嵌套字段
@@ -31,19 +40,161 @@ import java.util.Map;
  *     .modifyQueryParam("page", "1")               // 设置参数
  *     .removeQueryParam("debug")                   // 删除参数
  *     .method("GET");
- * RequestModifier.modifyRequest(context, "/user/profile/list", modification);
+ *
+ * // 基本用法
+ * RequestResponseStore store = ApiRequestModifier.modifyRequest(context, "/user/profile/list", modification);
+ *
+ * // 获取指定endpoint的最后一次请求/响应
+ * RequestResponseInfo lastInfo = store.getLast("/user/profile/list");
+ *
+ * // 使用回调实时处理
+ * RequestResponseStore store = ApiRequestModifier.modifyRequest(context, "/api/login", modification, info -> {
+ *     System.out.println("Request: " + info.request.url);
+ *     System.out.println("Response Status: " + info.response.status);
+ * });
  */
 public class ApiRequestModifier {
 
     private static final Logger logger = LoggerFactory.getLogger(ApiRequestModifier.class);
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    /** 操作类型枚举 */
+    /** 全局存储，按 endpoint 分类存储请求/响应信息 */
+    private static final Map<String, List<RequestResponseInfo>> GLOBAL_STORE = new ConcurrentHashMap<>();
+
+    // ==================== 数据类 ====================
+
+    /** 请求信息 */
+    public static class RequestInfo {
+        public final String url;
+        public final String method;
+        public final Map<String, String> headers;
+        public final String body;
+
+        public RequestInfo(String url, String method, Map<String, String> headers, String body) {
+            this.url = url;
+            this.method = method;
+            this.headers = headers != null ? new HashMap<>(headers) : new HashMap<>();
+            this.body = body;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("RequestInfo{url='%s', method='%s', headers=%d, body=%s}",
+                    url, method, headers.size(), body != null ? body.length() + " chars" : "null");
+        }
+    }
+
+    /** 响应信息 */
+    public static class ResponseInfo {
+        public final int status;
+        public final String statusText;
+        public final Map<String, String> headers;
+        public final String body;
+
+        public ResponseInfo(int status, String statusText, Map<String, String> headers, String body) {
+            this.status = status;
+            this.statusText = statusText;
+            this.headers = headers != null ? new HashMap<>(headers) : new HashMap<>();
+            this.body = body;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("ResponseInfo{status=%d, statusText='%s', headers=%d, body=%s}",
+                    status, statusText, headers.size(), body != null ? body.length() + " chars" : "null");
+        }
+    }
+
+    /** 请求/响应信息对 */
+    public static class RequestResponseInfo {
+        public final RequestInfo request;
+        public final ResponseInfo response;
+        public final long timestamp;
+
+        public RequestResponseInfo(RequestInfo request, ResponseInfo response) {
+            this.request = request;
+            this.response = response;
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        @Override
+        public String toString() {
+            return String.format("RequestResponseInfo{request=%s, response=%s, timestamp=%d}",
+                    request, response, timestamp);
+        }
+    }
+
+    /** 请求/响应存储器 */
+    public static class RequestResponseStore {
+        private final Map<String, List<RequestResponseInfo>> localStore = new ConcurrentHashMap<>();
+        private final String endpoint;
+
+        public RequestResponseStore(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
+        /** 添加请求/响应信息 */
+        void add(RequestResponseInfo info) {
+            String key = extractEndpoint(info.request.url);
+            localStore.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(info);
+            GLOBAL_STORE.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(info);
+        }
+
+        /** 获取指定 endpoint 的所有请求/响应 */
+        public List<RequestResponseInfo> get(String endpointKey) {
+            return localStore.getOrDefault(endpointKey, new ArrayList<>());
+        }
+
+        /** 获取指定 endpoint 的最后一次请求/响应 */
+        public RequestResponseInfo getLast(String endpointKey) {
+            List<RequestResponseInfo> list = localStore.get(endpointKey);
+            return (list != null && !list.isEmpty()) ? list.get(list.size() - 1) : null;
+        }
+
+        /** 获取当前 endpoint 的最后一次请求/响应 */
+        public RequestResponseInfo getLast() {
+            return getLast(endpoint);
+        }
+
+        /** 获取所有存储的数据 */
+        public Map<String, List<RequestResponseInfo>> toMap() {
+            return new HashMap<>(localStore);
+        }
+
+        /** 清空本地存储 */
+        public void clear() {
+            localStore.clear();
+        }
+
+        /** 清空全局存储 */
+        public static void clearGlobal() {
+            GLOBAL_STORE.clear();
+        }
+
+        /** 获取全局存储 */
+        public static Map<String, List<RequestResponseInfo>> getGlobalStore() {
+            return new HashMap<>(GLOBAL_STORE);
+        }
+
+        private String extractEndpoint(String url) {
+            if (url == null) return "";
+            int queryIndex = url.indexOf('?');
+            if (queryIndex > 0) {
+                url = url.substring(0, queryIndex);
+            }
+            int lastSlash = url.lastIndexOf('/');
+            return lastSlash >= 0 ? url.substring(lastSlash) : url;
+        }
+    }
+
+    // ==================== 操作类型枚举 ====================
+
     private enum Operation { SET, REMOVE }
 
     /** 字段操作包装类 */
     private static class FieldOp {
         final Operation op;
-        final Object value;  // SET 操作时有值，REMOVE 时为 null
+        final Object value;
 
         FieldOp(Operation op, Object value) {
             this.op = op;
@@ -52,6 +203,11 @@ public class ApiRequestModifier {
 
         static FieldOp set(Object value) { return new FieldOp(Operation.SET, value); }
         static FieldOp remove() { return new FieldOp(Operation.REMOVE, null); }
+
+        @Override
+        public String toString() {
+            return op == Operation.SET ? "SET=" + value : "REMOVE";
+        }
     }
 
     private String body;
@@ -179,7 +335,6 @@ public class ApiRequestModifier {
 
     /** 应用 body 修改到原始请求体 */
     private String applyBodyModifications(String originalBody) {
-        // 如果完全替换 body 且没有字段操作，直接返回
         if (body != null && bodyOps.isEmpty()) {
             return body;
         }
@@ -320,28 +475,108 @@ public class ApiRequestModifier {
 
     /**
      * 统一修改请求 - BrowserContext 版本
-     *
-     * @param context BrowserContext
-     * @param endpoint URL或endpoint
-     * @param modification 请求修改配置
+     * @return RequestResponseStore 存储请求/响应信息
      */
-    public static void modifyRequest(BrowserContext context, String endpoint, ApiRequestModifier modification) {
-        logger.info("========== Unified request modification for: {} ==========", endpoint);
-        logger.info("   Body: {}", modification.body);
-        logger.info("   BodyOps: {}", modification.bodyOps);
-        logger.info("   HeaderOps: {}", modification.headerOps);
-        logger.info("   QueryParamOps: {}", modification.queryParamOps);
-        logger.info("   Method: {}", modification.method);
+    public static RequestResponseStore modifyRequest(BrowserContext context, String endpoint, ApiRequestModifier modification) {
+        return modifyRequest(context, endpoint, modification, null);
+    }
+
+    /**
+     * 统一修改请求 - BrowserContext 版本（带回调）
+     * @param callback 每次请求完成后的回调
+     * @return RequestResponseStore 存储请求/响应信息
+     */
+    public static RequestResponseStore modifyRequest(BrowserContext context, String endpoint,
+                                                     ApiRequestModifier modification,
+                                                     Consumer<RequestResponseInfo> callback) {
+        logger.info("========== Configuring Request Modifier for: {} ==========", endpoint);
+        logger.info("Modification Config: {}", formatModificationConfig(modification));
 
         String globPattern = "**" + endpoint + "**";
-        logger.info("Registering unified route for endpoint: {} with glob pattern: {}", endpoint, globPattern);
+        logger.info("Registering route with glob pattern: {}", globPattern);
 
+        RequestResponseStore store = new RequestResponseStore(endpoint);
+
+        // 先注册响应监听器（在route之前）
+        context.onResponse(response -> {
+            String responseUrl = response.url();
+            if (responseUrl.contains(endpoint)) {
+                try {
+                    Request respRequest = response.request();
+
+                    logger.info("========================================");
+                    logger.info("[RESPONSE] {}", responseUrl);
+                    logger.info("========================================");
+
+                    // 请求信息（修改后的）
+                    logger.info("[Request Info]");
+                    logger.info("   URL: {}", respRequest.url());
+                    logger.info("   Method: {}", respRequest.method());
+                    logger.info("   Headers: {}", formatHeaders(respRequest.headers()));
+                    if (respRequest.postData() != null) {
+                        logger.info("   Body: {}", respRequest.postData());
+                    }
+
+                    // 响应信息
+                    logger.info("[Response Info]");
+                    logger.info("   Status: {} {}", response.status(), response.statusText());
+                    logger.info("   Headers: {}", formatHeaders(response.headers()));
+
+                    String respBody = null;
+                    try {
+                        respBody = response.text();
+                        logger.info("   Body: {}", respBody);
+                    } catch (Exception e) {
+                        logger.info("   Body: (Unable to read response body)");
+                    }
+
+                    logger.info("========================================");
+
+                    // 存储请求/响应信息
+                    RequestInfo requestInfo = new RequestInfo(
+                            respRequest.url(),
+                            respRequest.method(),
+                            respRequest.headers(),
+                            respRequest.postData()
+                    );
+                    ResponseInfo responseInfo = new ResponseInfo(
+                            response.status(),
+                            response.statusText(),
+                            response.headers(),
+                            respBody
+                    );
+                    RequestResponseInfo info = new RequestResponseInfo(requestInfo, responseInfo);
+                    store.add(info);
+
+                    // 执行回调
+                    if (callback != null) {
+                        try {
+                            callback.accept(info);
+                        } catch (Exception e) {
+                            logger.error("Error in callback", e);
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.error("Error logging response", e);
+                }
+            }
+        });
+
+        // 然后注册路由拦截
         context.route(globPattern, route -> {
             try {
                 Request request = route.request();
                 String url = request.url();
 
-                logger.info(">>> ROUTE MATCHED (Unified): {}", url);
+                logger.info("========================================");
+                logger.info("[REQUEST MODIFICATION] {}", url);
+                logger.info("========================================");
+                logger.info("[Original Request]");
+                logger.info("   URL: {}", url);
+                logger.info("   Method: {}", request.method());
+                logger.info("   Headers: {}", formatHeaders(request.headers()));
+                logger.info("   Body: {}", request.postData());
+                logger.info("----------------------------------------");
 
                 Route.ResumeOptions options = new Route.ResumeOptions();
 
@@ -350,20 +585,22 @@ public class ApiRequestModifier {
                     String originalBody = request.postData();
                     String modifiedBody = modification.applyBodyModifications(originalBody);
                     options.setPostData(modifiedBody);
-                    logger.info("   -> Original body: {}", originalBody);
-                    logger.info("   -> Modified body: {}", modifiedBody);
+                    logger.info("[Modified Body]");
+                    logger.info("   Original: {}", originalBody);
+                    logger.info("   Modified: {}", modifiedBody);
                 }
 
                 // 2. 修改 Headers
                 if (modification.hasHeaderModifications()) {
                     Map<String, String> headers = new HashMap<>(request.headers());
+                    logger.info("[Modified Headers]");
                     for (Map.Entry<String, FieldOp> entry : modification.headerOps.entrySet()) {
                         if (entry.getValue().op == Operation.REMOVE) {
                             headers.remove(entry.getKey());
-                            logger.info("   -> Removed header: {}", entry.getKey());
+                            logger.info("   Removed: {}", entry.getKey());
                         } else {
                             headers.put(entry.getKey(), (String) entry.getValue().value);
-                            logger.info("   -> Set header: {} = {}", entry.getKey(), entry.getValue().value);
+                            logger.info("   Set: {} = {}", entry.getKey(), entry.getValue().value);
                         }
                     }
                     options.setHeaders(headers);
@@ -372,59 +609,143 @@ public class ApiRequestModifier {
                 // 3. 修改 Query Params
                 if (modification.hasQueryParamModifications()) {
                     String newUrl = url;
+                    logger.info("[Modified Query Params]");
                     for (Map.Entry<String, FieldOp> entry : modification.queryParamOps.entrySet()) {
                         if (entry.getValue().op == Operation.REMOVE) {
                             newUrl = modifyUrlQueryParam(newUrl, entry.getKey(), null);
-                            logger.info("   -> Removed query param: {}", entry.getKey());
+                            logger.info("   Removed: {}", entry.getKey());
                         } else {
                             newUrl = modifyUrlQueryParam(newUrl, entry.getKey(), (String) entry.getValue().value);
-                            logger.info("   -> Set query param: {} = {}", entry.getKey(), entry.getValue().value);
+                            logger.info("   Set: {} = {}", entry.getKey(), entry.getValue().value);
                         }
                     }
                     options.setUrl(newUrl);
+                    logger.info("   New URL: {}", newUrl);
                 }
 
                 // 4. 修改 Method
                 if (modification.method != null) {
                     options.setMethod(modification.method);
-                    logger.info("   -> Setting method: {}", modification.method);
+                    logger.info("[Modified Method] {} -> {}", request.method(), modification.method);
                 }
 
-                logger.info(">>> Request modified successfully!");
+                logger.info("========================================");
+
                 route.resume(options);
             } catch (Exception e) {
-                logger.error("Error in unified request modification handler", e);
+                logger.error("Error in request modification handler", e);
                 route.resume();
             }
         });
 
-        logger.info(" Unified request modifier configured successfully!");
+        logger.info("Request modifier configured successfully!");
+        return store;
     }
 
     /**
      * 统一修改请求 - Page 版本
-     *
-     * @param page Page
-     * @param endpoint URL或endpoint
-     * @param modification 请求修改配置
+     * @return RequestResponseStore 存储请求/响应信息
      */
-    public static void modifyRequest(Page page, String endpoint, ApiRequestModifier modification) {
-        logger.info("========== Unified request modification for: {} ==========", endpoint);
-        logger.info("   Body: {}", modification.body);
-        logger.info("   BodyOps: {}", modification.bodyOps);
-        logger.info("   HeaderOps: {}", modification.headerOps);
-        logger.info("   QueryParamOps: {}", modification.queryParamOps);
-        logger.info("   Method: {}", modification.method);
+    public static RequestResponseStore modifyRequest(Page page, String endpoint, ApiRequestModifier modification) {
+        return modifyRequest(page, endpoint, modification, null);
+    }
+
+    /**
+     * 统一修改请求 - Page 版本（带回调）
+     * @param callback 每次请求完成后的回调
+     * @return RequestResponseStore 存储请求/响应信息
+     */
+    public static RequestResponseStore modifyRequest(Page page, String endpoint,
+                                                     ApiRequestModifier modification,
+                                                     Consumer<RequestResponseInfo> callback) {
+        logger.info("========== Configuring Request Modifier for: {} ==========", endpoint);
+        logger.info("Modification Config: {}", formatModificationConfig(modification));
 
         String globPattern = "**" + endpoint + "**";
-        logger.info("Registering unified route for endpoint: {} with glob pattern: {}", endpoint, globPattern);
+        logger.info("Registering route with glob pattern: {}", globPattern);
 
+        RequestResponseStore store = new RequestResponseStore(endpoint);
+
+        // 先注册响应监听器（在route之前）
+        page.onResponse(response -> {
+            String responseUrl = response.url();
+            if (responseUrl.contains(endpoint)) {
+                try {
+                    Request respRequest = response.request();
+
+                    logger.info("========================================");
+                    logger.info("[RESPONSE] {}", responseUrl);
+                    logger.info("========================================");
+
+                    // 请求信息（修改后的）
+                    logger.info("[Request Info]");
+                    logger.info("   URL: {}", respRequest.url());
+                    logger.info("   Method: {}", respRequest.method());
+                    logger.info("   Headers: {}", formatHeaders(respRequest.headers()));
+                    if (respRequest.postData() != null) {
+                        logger.info("   Body: {}", respRequest.postData());
+                    }
+
+                    // 响应信息
+                    logger.info("[Response Info]");
+                    logger.info("   Status: {} {}", response.status(), response.statusText());
+                    logger.info("   Headers: {}", formatHeaders(response.headers()));
+
+                    String respBody = null;
+                    try {
+                        respBody = response.text();
+                        logger.info("   Body: {}", respBody);
+                    } catch (Exception e) {
+                        logger.info("   Body: (Unable to read response body)");
+                    }
+
+                    logger.info("========================================");
+
+                    // 存储请求/响应信息
+                    RequestInfo requestInfo = new RequestInfo(
+                            respRequest.url(),
+                            respRequest.method(),
+                            respRequest.headers(),
+                            respRequest.postData()
+                    );
+                    ResponseInfo responseInfo = new ResponseInfo(
+                            response.status(),
+                            response.statusText(),
+                            response.headers(),
+                            respBody
+                    );
+                    RequestResponseInfo info = new RequestResponseInfo(requestInfo, responseInfo);
+                    store.add(info);
+
+                    // 执行回调
+                    if (callback != null) {
+                        try {
+                            callback.accept(info);
+                        } catch (Exception e) {
+                            logger.error("Error in callback", e);
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.error("Error logging response", e);
+                }
+            }
+        });
+
+        // 然后注册路由拦截
         page.route(globPattern, route -> {
             try {
                 Request request = route.request();
                 String url = request.url();
 
-                logger.info(">>> ROUTE MATCHED (Unified Page): {}", url);
+                logger.info("========================================");
+                logger.info("[REQUEST MODIFICATION] {}", url);
+                logger.info("========================================");
+                logger.info("[Original Request]");
+                logger.info("   URL: {}", url);
+                logger.info("   Method: {}", request.method());
+                logger.info("   Headers: {}", formatHeaders(request.headers()));
+                logger.info("   Body: {}", request.postData());
+                logger.info("----------------------------------------");
 
                 Route.ResumeOptions options = new Route.ResumeOptions();
 
@@ -433,20 +754,22 @@ public class ApiRequestModifier {
                     String originalBody = request.postData();
                     String modifiedBody = modification.applyBodyModifications(originalBody);
                     options.setPostData(modifiedBody);
-                    logger.info("   -> Original body: {}", originalBody);
-                    logger.info("   -> Modified body: {}", modifiedBody);
+                    logger.info("[Modified Body]");
+                    logger.info("   Original: {}", originalBody);
+                    logger.info("   Modified: {}", modifiedBody);
                 }
 
                 // 2. 修改 Headers
                 if (modification.hasHeaderModifications()) {
                     Map<String, String> headers = new HashMap<>(request.headers());
+                    logger.info("[Modified Headers]");
                     for (Map.Entry<String, FieldOp> entry : modification.headerOps.entrySet()) {
                         if (entry.getValue().op == Operation.REMOVE) {
                             headers.remove(entry.getKey());
-                            logger.info("   -> Removed header: {}", entry.getKey());
+                            logger.info("   Removed: {}", entry.getKey());
                         } else {
                             headers.put(entry.getKey(), (String) entry.getValue().value);
-                            logger.info("   -> Set header: {} = {}", entry.getKey(), entry.getValue().value);
+                            logger.info("   Set: {} = {}", entry.getKey(), entry.getValue().value);
                         }
                     }
                     options.setHeaders(headers);
@@ -455,99 +778,119 @@ public class ApiRequestModifier {
                 // 3. 修改 Query Params
                 if (modification.hasQueryParamModifications()) {
                     String newUrl = url;
+                    logger.info("[Modified Query Params]");
                     for (Map.Entry<String, FieldOp> entry : modification.queryParamOps.entrySet()) {
                         if (entry.getValue().op == Operation.REMOVE) {
                             newUrl = modifyUrlQueryParam(newUrl, entry.getKey(), null);
-                            logger.info("   -> Removed query param: {}", entry.getKey());
+                            logger.info("   Removed: {}", entry.getKey());
                         } else {
                             newUrl = modifyUrlQueryParam(newUrl, entry.getKey(), (String) entry.getValue().value);
-                            logger.info("   -> Set query param: {} = {}", entry.getKey(), entry.getValue().value);
+                            logger.info("   Set: {} = {}", entry.getKey(), entry.getValue().value);
                         }
                     }
                     options.setUrl(newUrl);
+                    logger.info("   New URL: {}", newUrl);
                 }
 
                 // 4. 修改 Method
                 if (modification.method != null) {
                     options.setMethod(modification.method);
-                    logger.info("   -> Setting method: {}", modification.method);
+                    logger.info("[Modified Method] {} -> {}", request.method(), modification.method);
                 }
 
-                logger.info(">>> Request modified successfully!");
+                logger.info("========================================");
+
                 route.resume(options);
             } catch (Exception e) {
-                logger.error("Error in unified request modification handler", e);
+                logger.error("Error in request modification handler", e);
                 route.resume();
             }
         });
 
-        logger.info(" Unified request modifier configured successfully!");
+        logger.info("Request modifier configured successfully!");
+        return store;
     }
 
-    /**
-     * 修改 URL 查询参数
-     * @param url 原始 URL
-     * @param paramName 参数名
-     * @param paramValue 参数值（如果为 null，则删除该参数）
-     * @return 修改后的 URL
-     */
+    // ==================== 辅助方法 ====================
+
+    /** 格式化修改配置 */
+    private static String formatModificationConfig(ApiRequestModifier mod) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n   Body: ").append(mod.body != null ? mod.body : "(no change)");
+        sb.append("\n   BodyOps: ").append(mod.bodyOps.isEmpty() ? "(none)" : mod.bodyOps);
+        sb.append("\n   HeaderOps: ").append(mod.headerOps.isEmpty() ? "(none)" : mod.headerOps);
+        sb.append("\n   QueryParamOps: ").append(mod.queryParamOps.isEmpty() ? "(none)" : mod.queryParamOps);
+        sb.append("\n   Method: ").append(mod.method != null ? mod.method : "(no change)");
+        return sb.toString();
+    }
+
+    /** 格式化Headers为JSON字符串 */
+    private static String formatHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) {
+            return "{}";
+        }
+        try {
+            JsonObject json = new JsonObject();
+            headers.forEach(json::addProperty);
+            return GSON.toJson(json);
+        } catch (Exception e) {
+            return headers.toString();
+        }
+    }
+
+
+    /** 修改 URL 查询参数 */
     private static String modifyUrlQueryParam(String url, String paramName, String paramValue) {
         if (url == null) {
             return url;
         }
 
         try {
-            java.net.URI uri = java.net.URI.create(url);
-
-            // 解析查询参数
+            URI uri = URI.create(url);
             String query = uri.getQuery();
-            Map<String, String> params = new java.util.LinkedHashMap<>();
+            Map<String, String> params = new LinkedHashMap<>();
 
             if (query != null && !query.isEmpty()) {
                 for (String param : query.split("&")) {
                     String[] keyValue = param.split("=", 2);
                     if (keyValue.length == 2) {
-                        String key = java.net.URLDecoder.decode(keyValue[0], "UTF-8");
-                        String value = java.net.URLDecoder.decode(keyValue[1], "UTF-8");
+                        String key = URLDecoder.decode(keyValue[0], "UTF-8");
+                        String value = URLDecoder.decode(keyValue[1], "UTF-8");
                         params.put(key, value);
                     }
                 }
             }
 
-            // 修改或删除参数
             if (paramValue == null) {
                 params.remove(paramName);
             } else {
                 params.put(paramName, paramValue);
             }
 
-            // 重建查询字符串
             StringBuilder newQuery = new StringBuilder();
             for (Map.Entry<String, String> entry : params.entrySet()) {
                 if (newQuery.length() > 0) {
                     newQuery.append("&");
                 }
-                newQuery.append(java.net.URLEncoder.encode(entry.getKey(), "UTF-8"));
+                newQuery.append(URLEncoder.encode(entry.getKey(), "UTF-8"));
                 newQuery.append("=");
-                newQuery.append(java.net.URLEncoder.encode(entry.getValue(), "UTF-8"));
+                newQuery.append(URLEncoder.encode(entry.getValue(), "UTF-8"));
             }
 
-            // 构建新 URL
-            java.net.URI newUri = new java.net.URI(
-                uri.getScheme(),
-                uri.getAuthority(),
-                uri.getPath(),
-                newQuery.length() > 0 ? newQuery.toString() : null,
-                uri.getFragment()
+            URI newUri = new URI(
+                    uri.getScheme(),
+                    uri.getAuthority(),
+                    uri.getPath(),
+                    newQuery.length() > 0 ? newQuery.toString() : null,
+                    uri.getFragment()
             );
 
             return newUri.toString();
         } catch (Exception e) {
             logger.warn("Failed to modify URL query param: {} = {}, error: {}", paramName, paramValue, e.getMessage());
-            // 降级处理：简单追加
             String separator = url.contains("?") ? "&" : "?";
             if (paramValue == null) {
-                return url; // 无法删除，返回原 URL
+                return url;
             }
             return url + separator + paramName + "=" + paramValue;
         }
