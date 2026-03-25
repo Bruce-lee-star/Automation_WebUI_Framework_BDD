@@ -68,6 +68,13 @@ public class PlaywrightManager {
     private static final ThreadLocal<BrowserContext> contextThreadLocal = new ThreadLocal<>();
     private static final ThreadLocal<Page> pageThreadLocal = new ThreadLocal<>();
     private static final List<Process> downloadProcesses = new ArrayList<>();
+    
+    // 线程安全锁：保护共享资源（Browser 实例）
+    private static final Object BROWSER_LOCK = new Object();
+    
+    // Context/Page 细粒度锁：保护 Context 和 Page 创建/销毁
+    private static final Object CONTEXT_LOCK = new Object();
+    private static final Object PAGE_LOCK = new Object();
 
     // ==================== 自定义 Context 选项（用户自定义优先于框架配置） ====================
     private static final ThreadLocal<Boolean> customContextOptionsFlag = new ThreadLocal<>();
@@ -856,12 +863,15 @@ public class PlaywrightManager {
         if (context != null && customFlag != null && customFlag) {
             LoggingConfigUtil.logInfoIfVerbose(logger, "Custom context options detected, recreating context to apply them...");
             recreateContextIfCustomConfigNeeded();
-            context = null; // 强制重新创建
+            context = null;
         }
         
-        if (context == null || (context.browser() != null && !context.browser().isConnected())) {
-            context = createContext();
-            contextThreadLocal.set(context);
+        // 【关键】线程安全：使用锁保护 Context 创建
+        synchronized (CONTEXT_LOCK) {
+            if (context == null || (context.browser() != null && !context.browser().isConnected())) {
+                context = createContext();
+                contextThreadLocal.set(context);
+            }
         }
         return context;
     }
@@ -1140,6 +1150,16 @@ public class PlaywrightManager {
             page = createPage(context);
             pageThreadLocal.set(page);
         }
+        
+        // 【关键】线程安全：使用锁保护 Page 创建/设置
+        synchronized (PAGE_LOCK) {
+            page = pageThreadLocal.get();
+            if (page == null || page.isClosed()) {
+                BrowserContext context = getContext();
+                page = createPage(context);
+                pageThreadLocal.set(page);
+            }
+        }
         return page;
     }
 
@@ -1176,7 +1196,6 @@ public class PlaywrightManager {
         Browser.NewContextOptions contextOptions = new Browser.NewContextOptions();
 
         // 1. 先配置框架默认项（所有场景都需要的默认配置）
-        configureViewport(contextOptions);
         configureDefaultContextOptions(contextOptions);
 
         // 2. 条件注入自定义配置（仅当 flag=true 时叠加）
@@ -1357,6 +1376,15 @@ public class PlaywrightManager {
     private static void resetCustomContextOptions() {
         LoggingConfigUtil.logInfoIfVerbose(logger, "Resetting custom context options for next scenario...");
         
+        // 【关键】线程安全检查：确没有正在使用的 Context 才清除配置
+        BrowserContext existingContext = contextThreadLocal.get();
+        if (existingContext != null && !existingContext.browser().isConnected()) {
+            LoggingConfigUtil.logWarnIfVerbose(logger, 
+                "Cannot reset custom options: Context is still in use by thread: {}. Clearing configuration anyway.", 
+                Thread.currentThread().getName());
+            // 继续清除，但记录警告
+        }
+        
         // 重置 flag
         customContextOptionsFlag.remove();
         
@@ -1375,51 +1403,6 @@ public class PlaywrightManager {
         customViewportHeight.remove();
         
         LoggingConfigUtil.logInfoIfVerbose(logger, "Custom context options reset completed");
-    }
-
-    /**
-     * 配置视口大小
-     * <p>
-     * 支持自定义 viewport（优先级高于框架默认配置）
-     */
-    private static void configureViewport(Browser.NewContextOptions contextOptions) {
-        // 【1】检查是否启用自定义配置
-        Boolean customContextFlag = customContextOptionsFlag.get();
-
-        // 【2】Viewport（自定义优先）
-        if (customContextFlag != null && customContextFlag) {
-            Integer customWidth = customViewportWidth.get();
-            Integer customHeight = customViewportHeight.get();
-
-            if (customWidth != null && customHeight != null) {
-                // 使用自定义 viewport
-                contextOptions.setViewportSize(customWidth, customHeight);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Using custom viewport (priority over framework config): {}x{}", customWidth, customHeight);
-                return;
-            }
-        }
-
-        // 【3】使用框架默认配置
-        Dimension screenSize = getAvailableScreenSize();
-        int screenWidth = (int) screenSize.getWidth();
-        int screenHeight = (int) screenSize.getHeight();
-
-        boolean maximizeWindow = isWindowMaximize();
-        String maximizeArgs = getWindowMaximizeArgs();
-        boolean hasStartMaximized = maximizeArgs.contains("--start-maximized");
-
-        if (maximizeWindow && !hasStartMaximized) {
-            // 使用逻辑分辨率作为 viewport（与浏览器窗口大小一致）
-            contextOptions.setViewportSize(screenWidth, screenHeight);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Window maximization enabled, viewport set to logical screen size: {}x{}", screenWidth, screenHeight);
-        } else if (!hasStartMaximized) {
-            int viewportWidth = getViewportWidth();
-            int viewportHeight = getViewportHeight();
-            contextOptions.setViewportSize(viewportWidth, viewportHeight);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Using configured viewport size: {}x{} (explicit viewport, no maximization)", viewportWidth, viewportHeight);
-        } else {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Using browser auto-sizing (--start-maximized or no viewport specified)");
-        }
     }
 
     /**
@@ -1644,19 +1627,21 @@ public class PlaywrightManager {
      * 关闭当前线程的 Page
      */
     public static void closePage() {
-        Page page = pageThreadLocal.get();
-        if (page != null) {
-            try {
-                if (!page.isClosed()) {
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "Closing Page...");
-                    page.close();
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "Page closed");
+        synchronized (PAGE_LOCK) {
+            Page page = pageThreadLocal.get();
+            if (page != null) {
+                try {
+                    if (!page.isClosed()) {
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Closing Page...");
+                        page.close();
+                        LoggingConfigUtil.logInfoIfVerbose(logger, "Page closed");
+                    }
+                } catch (Exception e) {
+                    logger.error("Failed to close page: {}", e.getMessage(), e);
+                    throw new BrowserException("Failed to close page", e);
+                } finally {
+                    pageThreadLocal.remove();
                 }
-            } catch (Exception e) {
-                logger.error("Failed to close page: {}", e.getMessage(), e);
-                throw new BrowserException("Failed to close page", e);
-            } finally {
-                pageThreadLocal.remove();
             }
         }
     }
@@ -1665,24 +1650,26 @@ public class PlaywrightManager {
      * 关闭当前线程的 Context
      */
     public static void closeContext() {
-        BrowserContext context = contextThreadLocal.get();
-        if (context != null) {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Closing BrowserContext...");
+        synchronized (CONTEXT_LOCK) {
+            BrowserContext context = contextThreadLocal.get();
+            if (context != null) {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Closing BrowserContext...");
 
-            try {
-                // 停止 tracing
-                if (SystemEnvironmentVariables.currentEnvironmentVariables().getPropertyAsBoolean("playwright.context.trace.enabled", false)) {
-                    String tracePath = "target/traces/trace-" + System.currentTimeMillis() + ".zip";
-                    context.tracing().stop(new Tracing.StopOptions().setPath(Paths.get(tracePath)));
+                try {
+                    // 停止 tracing
+                    if (SystemEnvironmentVariables.currentEnvironmentVariables().getPropertyAsBoolean("playwright.context.trace.enabled", false)) {
+                        String tracePath = "target/traces/trace-" + System.currentTimeMillis() + ".zip";
+                        context.tracing().stop(new Tracing.StopOptions().setPath(Paths.get(tracePath)));
+                    }
+
+                    context.close();
+                    LoggingConfigUtil.logInfoIfVerbose(logger, "BrowserContext closed");
+                } catch (Exception e) {
+                    logger.error("Failed to close BrowserContext: {}", e.getMessage(), e);
+                    throw new BrowserException("Failed to close BrowserContext", e);
+                } finally {
+                    contextThreadLocal.remove();
                 }
-
-                context.close();
-                LoggingConfigUtil.logInfoIfVerbose(logger, "BrowserContext closed");
-            } catch (Exception e) {
-                logger.error("Failed to close BrowserContext: {}", e.getMessage(), e);
-                throw new BrowserException("Failed to close BrowserContext", e);
-            } finally {
-                contextThreadLocal.remove();
             }
         }
     }

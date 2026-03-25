@@ -5,8 +5,10 @@ import com.hsbc.cmb.hk.dbb.automation.framework.web.config.BrowserOverrideManage
 import com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle.PlaywrightManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.session.SessionManager;
 import com.hsbc.cmb.hk.dbb.automation.tests.steps.LoginSteps;
+import com.hsbc.cmb.hk.dbb.automation.utils.RandomStringUtil;
 import com.microsoft.playwright.options.ColorScheme;
 import io.cucumber.java.en.Given;
+import io.cucumber.java.sl.In;
 import net.serenitybdd.annotations.Steps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,7 +40,7 @@ import org.slf4j.LoggerFactory;
 public class LogonGlue {
 
     private static final Logger logger = LoggerFactory.getLogger(LogonGlue.class);
-
+    private static Integer count = 0;
     @Steps
     private LoginSteps loginSteps;
 
@@ -67,12 +69,17 @@ public class LogonGlue {
         logger.info("  Effective browser: {}", effectiveBrowser);
         logger.info("  Default browser: {}", defaultBrowser);
         logger.info("========================================");
-
+        count = Integer.valueOf(RandomStringUtil.randomNumeric(3));
+        System.out.println("count:" + count);
         // 【在Glue方法中设置自定义配置】
         // 框架不会立即重置customContextOptionsFlag,允许多次设置
         PlaywrightManager.setCustomColorScheme(ColorScheme.DARK);
         PlaywrightManager.setCustomUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.0.0 Safari/537.36");
-        PlaywrightManager.setCustomViewportSize(600, 840);
+        if(count % 2 == 0){
+            PlaywrightManager.setCustomViewportSize(1280, 720);
+        }else{
+            PlaywrightManager.setCustomViewportSize(600, 840);
+        }
 
         // 【准备session】在业务层直接调用
         String sessionKey = env + "_" + username;

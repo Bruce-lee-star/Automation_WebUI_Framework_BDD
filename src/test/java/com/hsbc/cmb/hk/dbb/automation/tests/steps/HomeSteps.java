@@ -32,9 +32,9 @@ public class HomeSteps {
         // 生成 session key
         String sessionKey = generateSessionKey();
 
-        // 保存切换 profile 后的 session 和 homeUrl
+        // 【使用新 API】保存切换 profile 后的 session 和 homeUrl
         String homeUrl = homePage.getPage().url();
-        SessionManager.saveSession(sessionKey, homeUrl);
+        SessionManager.saveCurrentSession(sessionKey, homeUrl);
     }
 
     /**
