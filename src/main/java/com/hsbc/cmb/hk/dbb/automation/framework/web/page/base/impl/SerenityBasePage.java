@@ -23,12 +23,12 @@ import com.microsoft.playwright.options.BoundingBox;
  * 继承自BasePage，添加了Serenity BDD集成功能
  */
 public abstract class SerenityBasePage extends BasePage {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(SerenityBasePage.class);
-    
+
     // 存储Serenity测试数据
     private final Map<String, Object> serenityTestData = new HashMap<>();
-    
+
     /**
      * 构造函数
      */
@@ -37,8 +37,8 @@ public abstract class SerenityBasePage extends BasePage {
         super();
         try {
             LoggingConfigUtil.logInfoIfVerbose(
-                logger, "🚀 Initializing Serenity Base Page");
-            
+                    logger, "🚀 Initializing Serenity Base Page");
+
             // 记录页面初始化到Serenity报告
             addSerenityTestData("pageInitialized", true);
             addSerenityTestData("pageClass", this.getClass().getSimpleName());
@@ -47,7 +47,7 @@ public abstract class SerenityBasePage extends BasePage {
             throw new ConfigurationException("Failed to initialize Serenity Base Page", e);
         }
     }
-    
+
     /**
      * 获取当前页面的Page对象
      * 覆盖父类方法，添加Serenity集成
@@ -84,29 +84,29 @@ public abstract class SerenityBasePage extends BasePage {
             throw new ConfigurationException("Failed to get browser context", e);
         }
     }
-    
+
     /**
      * 添加测试数据到本地存储
      */
     protected void addSerenityTestData(String key, Object value) {
         try {
             serenityTestData.put(key, value);
-            
+
             LoggingConfigUtil.logDebugIfVerbose(
-                logger, "📝 Added Serenity test data: {} = {}", key, value);
+                    logger, "📝 Added Serenity test data: {} = {}", key, value);
         } catch (Exception e) {
             logger.error("Failed to add Serenity test data: {} = {}", key, value, e);
             throw new ConfigurationException("Failed to add Serenity test data: " + key + " = " + value, e);
         }
     }
-    
+
     /**
      * 获取Serenity测试数据
      */
     protected Object getSerenityTestData(String key) {
         return serenityTestData.get(key);
     }
-    
+
     /**
      * 验证页面标题是否包含指定文本
      */
@@ -114,7 +114,7 @@ public abstract class SerenityBasePage extends BasePage {
         try {
             String actualTitle = getTitle();
             boolean contains = actualTitle.contains(expectedText);
-            
+
             if (contains) {
                 addSerenityTestData("titleVerification", "PASS");
                 addSerenityTestData("expectedTitle", expectedText);
@@ -124,14 +124,14 @@ public abstract class SerenityBasePage extends BasePage {
                 addSerenityTestData("expectedTitle", expectedText);
                 addSerenityTestData("actualTitle", actualTitle);
             }
-            
+
             return contains;
         } catch (Exception e) {
             logger.error("Failed to verify page title contains: {}", expectedText, e);
             throw new ElementException("Failed to verify page title contains: " + expectedText, e);
         }
     }
-    
+
     /**
      * 验证页面标题是否等于指定文本
      */
@@ -139,7 +139,7 @@ public abstract class SerenityBasePage extends BasePage {
         try {
             String actualTitle = getTitle();
             boolean equals = actualTitle.equals(expectedText);
-            
+
             if (equals) {
                 addSerenityTestData("titleVerification", "PASS");
                 addSerenityTestData("expectedTitle", expectedText);
@@ -149,14 +149,14 @@ public abstract class SerenityBasePage extends BasePage {
                 addSerenityTestData("expectedTitle", expectedText);
                 addSerenityTestData("actualTitle", actualTitle);
             }
-            
+
             return equals;
         } catch (Exception e) {
             logger.error("Failed to verify page title equals: {}", expectedText, e);
             throw new ElementException("Failed to verify page title equals: " + expectedText, e);
         }
     }
-    
+
     /**
      * 验证当前URL是否包含指定文本
      */
@@ -164,7 +164,7 @@ public abstract class SerenityBasePage extends BasePage {
         try {
             String actualUrl = getCurrentUrl();
             boolean contains = actualUrl.contains(expectedText);
-            
+
             if (contains) {
                 addSerenityTestData("urlVerification", "PASS");
                 addSerenityTestData("expectedUrlFragment", expectedText);
@@ -174,14 +174,14 @@ public abstract class SerenityBasePage extends BasePage {
                 addSerenityTestData("expectedUrlFragment", expectedText);
                 addSerenityTestData("actualUrl", actualUrl);
             }
-            
+
             return contains;
         } catch (Exception e) {
             logger.error("Failed to verify URL contains: {}", expectedText, e);
             throw new ElementException("Failed to verify URL contains: " + expectedText, e);
         }
     }
-    
+
     /**
      * 点击元素 - 覆盖父类方法，添加Serenity集成
      */
@@ -197,7 +197,7 @@ public abstract class SerenityBasePage extends BasePage {
             throw new ElementNotClickableException(selector, e);
         }
     }
-    
+
     /**
      * 输入文本 - 覆盖父类方法，添加Serenity集成
      */
@@ -214,7 +214,7 @@ public abstract class SerenityBasePage extends BasePage {
             throw new ElementException("Failed to type text '" + text + "' into element: " + selector, e);
         }
     }
-    
+
     /**
      * 导航到指定URL - 覆盖父类方法，添加Serenity集成
      */
@@ -230,14 +230,14 @@ public abstract class SerenityBasePage extends BasePage {
             throw new ElementException("Failed to navigate to URL: " + url, e);
         }
     }
-    
+
     /**
      * 获取Serenity测试数据映射
      */
     public Map<String, Object> getSerenityTestDataMap() {
         return new HashMap<>(serenityTestData);
     }
-    
+
     /**
      * 清除Serenity测试数据
      */
@@ -245,7 +245,7 @@ public abstract class SerenityBasePage extends BasePage {
         serenityTestData.clear();
         logger.debug("🧹 Cleared all Serenity test data");
     }
-    
+
     /**
      * 记录页面验证信息
      */
@@ -259,7 +259,8 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 在指定时间范围内等待元素可见（Serenity集成版）
-     * @param selector 元素选择器
+     *
+     * @param selector       元素选择器
      * @param timeoutSeconds 最大超时时间（秒）
      */
     @Override
@@ -270,7 +271,8 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 在指定时间范围内等待元素隐藏（Serenity集成版）
-     * @param selector 元素选择器
+     *
+     * @param selector       元素选择器
      * @param timeoutSeconds 最大超时时间（秒）
      */
     @Override
@@ -281,7 +283,8 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 在指定时间范围内等待元素可点击（Serenity集成版）
-     * @param selector 元素选择器
+     *
+     * @param selector       元素选择器
      * @param timeoutSeconds 最大超时时间（秒）
      */
     @Override
@@ -292,7 +295,8 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 在指定时间范围内等待页面标题包含文本（Serenity集成版）
-     * @param expectedTitle 期望的标题文本
+     *
+     * @param expectedTitle  期望的标题文本
      * @param timeoutSeconds 最大超时时间（秒）
      */
     @Override
@@ -303,8 +307,9 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 在指定时间范围内等待URL包含文本（Serenity集成版）
+     *
      * @param expectedUrlFragment 期望的URL片段
-     * @param timeoutSeconds 最大超时时间（秒）
+     * @param timeoutSeconds      最大超时时间（秒）
      */
     @Override
     public void waitForUrlContainsWithinTime(String expectedUrlFragment, int timeoutSeconds) {
@@ -314,9 +319,10 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 在指定时间范围内执行操作并验证结果（Serenity集成版）
-     * @param action 要执行的操作
-     * @param validation 验证逻辑
-     * @param timeoutSeconds 最大超时时间（秒）
+     *
+     * @param action            要执行的操作
+     * @param validation        验证逻辑
+     * @param timeoutSeconds    最大超时时间（秒）
      * @param actionDescription 操作描述
      * @return 如果在指定时间内操作成功并验证通过则返回true，否则返回false
      */
@@ -333,6 +339,7 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 断言元素应该可见（Serenity集成版）
+     *
      * @param selector 元素选择器
      * @throws RuntimeException 如果元素不可见
      */
@@ -348,6 +355,7 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 断言元素不应该可见（Serenity集成版）
+     *
      * @param selector 元素选择器
      * @throws RuntimeException 如果元素可见
      */
@@ -363,6 +371,7 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 检查页面源代码是否包含指定文本（Serenity集成版）
+     *
      * @param text 要检查的文本
      * @return 如果页面源代码包含指定文本则返回true，否则返回false
      */
@@ -379,7 +388,8 @@ public abstract class SerenityBasePage extends BasePage {
 
     /**
      * 获取元素属性值并断言其值（Serenity集成版）
-     * @param selector 元素选择器
+     *
+     * @param selector      元素选择器
      * @param attributeName 属性名
      * @param expectedValue 期望的属性值
      * @throws RuntimeException 如果属性值不匹配期望值
@@ -409,7 +419,7 @@ public abstract class SerenityBasePage extends BasePage {
     }
 
     @Override
-    public boolean retryWithValidation(Runnable operation, Predicate<Void> validation, 
+    public boolean retryWithValidation(Runnable operation, Predicate<Void> validation,
                                        int maxRetries, int retryIntervalMs, String operationDescription) {
         boolean result = super.retryWithValidation(operation, validation, maxRetries, retryIntervalMs, operationDescription);
         recordPageVerification("retryWithValidation_" + operationDescription, result);
@@ -567,6 +577,24 @@ public abstract class SerenityBasePage extends BasePage {
     // ==================== Web UI 操作（Serenity集成版）====================
 
     @Override
+    public void switchToPage(int pageIndex) {
+        super.switchToPage(pageIndex);
+        addSerenityTestData("switchToPage", "index_" + pageIndex);
+    }
+
+    @Override
+    public void switchToLatestPage() {
+        super.switchToLatestPage();
+        addSerenityTestData("switchToLatestPage", "completed");
+    }
+
+    @Override
+    public void closeCurrentPageAndSwitchBack() {
+        super.closeCurrentPageAndSwitchBack();
+        addSerenityTestData("closeCurrentPageAndSwitchBack", "completed");
+    }
+
+    @Override
     public void dragAndDrop(String sourceSelector, String targetSelector) {
         super.dragAndDrop(sourceSelector, targetSelector);
         addSerenityTestData("dragAndDrop", "from_" + sourceSelector + "_to_" + targetSelector);
@@ -608,150 +636,8 @@ public abstract class SerenityBasePage extends BasePage {
         super.scrollToElementCenter(targetSelector);
         addSerenityTestData("scrollToElementCenter", targetSelector);
     }
+}
 
     // ==================== 断言方法（Serenity集成版）====================
-
-    /**
-     * 断言元素文本包含指定文本
-     */
-    @Override
-    public void assertTextContains(String selector, String expectedText) {
-        super.assertTextContains(selector, expectedText);
-        recordPageVerification("assertTextContains_" + selector, true);
-    }
-
-    /**
-     * 断言元素文本等于指定文本
-     */
-    @Override
-    public void assertTextEquals(String selector, String expectedText) {
-        super.assertTextEquals(selector, expectedText);
-        recordPageVerification("assertTextEquals_" + selector, true);
-    }
-
-    /**
-     * 断言元素文本匹配正则表达式
-     */
-    @Override
-    public void assertTextMatches(String selector, String regex) {
-        super.assertTextMatches(selector, regex);
-        recordPageVerification("assertTextMatches_" + selector, true);
-    }
-
-    /**
-     * 断言元素可见
-     */
-    @Override
-    public void assertVisible(String selector) {
-        super.assertVisible(selector);
-        recordPageVerification("assertVisible_" + selector, true);
-    }
-
-    /**
-     * 断言元素不可见
-     */
-    @Override
-    public void assertNotVisible(String selector) {
-        super.assertNotVisible(selector);
-        recordPageVerification("assertNotVisible_" + selector, true);
-    }
-
-    /**
-     * 断言元素存在
-     */
-    @Override
-    public void assertExists(String selector) {
-        super.assertExists(selector);
-        recordPageVerification("assertExists_" + selector, true);
-    }
-
-    /**
-     * 断言元素不存在
-     */
-    @Override
-    public void assertNotExists(String selector) {
-        super.assertNotExists(selector);
-        recordPageVerification("assertNotExists_" + selector, true);
-    }
-
-    /**
-     * 断言元素被选中
-     */
-    @Override
-    public void assertChecked(String selector) {
-        super.assertChecked(selector);
-        recordPageVerification("assertChecked_" + selector, true);
-    }
-
-    /**
-     * 断言元素未被选中
-     */
-    @Override
-    public void assertNotChecked(String selector) {
-        super.assertNotChecked(selector);
-        recordPageVerification("assertNotChecked_" + selector, true);
-    }
-
-    /**
-     * 断言元素启用
-     */
-    @Override
-    public void assertEnabled(String selector) {
-        super.assertEnabled(selector);
-        recordPageVerification("assertEnabled_" + selector, true);
-    }
-
-    /**
-     * 断言元素禁用
-     */
-    @Override
-    public void assertDisabled(String selector) {
-        super.assertDisabled(selector);
-        recordPageVerification("assertDisabled_" + selector, true);
-    }
-
-    /**
-     * 断言元素可点击
-     */
-    @Override
-    public void assertClickable(String selector) {
-        super.assertClickable(selector);
-        recordPageVerification("assertClickable_" + selector, true);
-    }
-
-    /**
-     * 断言页面包含指定文本
-     */
-    @Override
-    public void assertPageContainsText(String text) {
-        super.assertPageContainsText(text);
-        recordPageVerification("assertPageContainsText_" + text, true);
-    }
-
-    /**
-     * 断言页面源代码包含指定文本
-     */
-    @Override
-    public void assertPageSourceContains(String text) {
-        super.assertPageSourceContains(text);
-        recordPageVerification("assertPageSourceContains_" + text, true);
-    }
-
-    /**
-     * 断言元素可访问
-     */
-    @Override
-    public void assertAccessible(String selector) {
-        super.assertAccessible(selector);
-        recordPageVerification("assertAccessible_" + selector, true);
-    }
-
-    /**
-     * 断言元素有 ARIA 标签
-     */
-    @Override
-    public void assertHasAriaLabel(String selector) {
-        super.assertHasAriaLabel(selector);
-        recordPageVerification("assertHasAriaLabel_" + selector, true);
-    }
-}
+    // 注意: 所有 assert 方法已从 BasePage 中移除,因此这里也移除了对应的覆盖方法
+    // 请使用 Serenity BDD 的断言功能或其他验证方法

@@ -2384,4 +2384,80 @@ public class PlaywrightManager {
     public static String getProjectName() {
         return FrameworkConfigManager.getString(FrameworkConfig.SERENITY_PROJECT_NAME);
     }
+
+    // ==================== 公共访问方法（用于其他类访问自定义配置） ====================
+
+    /**
+     * 获取自定义 Context 选项标志
+     */
+    static ThreadLocal<Boolean> getCustomContextOptionsFlag() {
+        return customContextOptionsFlag;
+    }
+
+    /**
+     * 获取自定义选项管理器实例
+     */
+    static CustomOptions getCustomOptions() {
+        return CustomOptions.INSTANCE;
+    }
+
+    // ==================== 自定义配置内部类 ====================
+
+    /**
+     * 自定义配置管理器（内部类）
+     * 负责管理所有自定义 Context 配置
+     */
+    public static class CustomOptions {
+        private static final CustomOptions INSTANCE = new CustomOptions();
+
+        // 所有自定义配置的 getter 方法
+
+        public java.nio.file.Path getStorageStatePath() {
+            return customStorageStatePath.get();
+        }
+
+        public String getLocale() {
+            return customLocale.get();
+        }
+
+        public String getTimezoneId() {
+            return customTimezoneId.get();
+        }
+
+        public String getUserAgent() {
+            return customUserAgent.get();
+        }
+
+        public java.util.List<String> getPermissions() {
+            return customPermissions.get();
+        }
+
+        public com.microsoft.playwright.options.Geolocation getGeolocation() {
+            return customGeolocation.get();
+        }
+
+        public Integer getDeviceScaleFactor() {
+            return customDeviceScaleFactor.get();
+        }
+
+        public Boolean getIsMobile() {
+            return customIsMobile.get();
+        }
+
+        public Boolean getHasTouch() {
+            return customHasTouch.get();
+        }
+
+        public com.microsoft.playwright.options.ColorScheme getColorScheme() {
+            return customColorScheme.get();
+        }
+
+        public Integer getViewportWidth() {
+            return customViewportWidth.get();
+        }
+
+        public Integer getViewportHeight() {
+            return customViewportHeight.get();
+        }
+    }
 }

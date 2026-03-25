@@ -8,6 +8,7 @@ import com.hsbc.cmb.hk.dbb.automation.framework.web.exceptions.TimeoutException;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle.PlaywrightManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.Element;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.PageElement;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.page.PageElementList;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.TimeoutConfig;
 import com.microsoft.playwright.*;
@@ -18,8 +19,6 @@ import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.MouseButton;
 import com.microsoft.playwright.options.SelectOption;
 import com.microsoft.playwright.options.WaitForSelectorState;
-import org.hamcrest.MatcherAssert;
-import org.hamcrest.Matchers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -85,6 +84,7 @@ public abstract class BasePage {
     /**
      * 初始化所有带@Element注解的字段
      * 使用反射自动创建PageElement实例并赋值
+     * 支持单个PageElement和List<PageElement>两种类型
      */
     private void initializeAnnotatedFields() {
         for (Field field : this.getClass().getDeclaredFields()) {
@@ -95,15 +95,32 @@ public abstract class BasePage {
 
                 try {
                     field.setAccessible(true);
-                    PageElement pageElement = new PageElement(selector, this);
-                    field.set(this, pageElement);
+                    
+                    // 检查字段类型是否为 List<PageElement>
+                    if (isListPageElement(field)) {
+                        // 创建 PageElementList（动态列表，每次访问都会重新查询）
+                        PageElementList elementList = new PageElementList(selector, this);
+                        field.set(this, elementList);
+                        
+                        if (LoggingConfigUtil.isVerboseLoggingEnabled() && !description.isEmpty()) {
+                            LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element list: {} - {} ({})",
+                                field.getName(), description, selector);
+                        } else if (LoggingConfigUtil.isVerboseLoggingEnabled()) {
+                            LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element list: {} ({})",
+                                field.getName(), selector);
+                        }
+                    } else {
+                        // 创建单个 PageElement
+                        PageElement pageElement = new PageElement(selector, this);
+                        field.set(this, pageElement);
 
-                    if (LoggingConfigUtil.isVerboseLoggingEnabled() && !description.isEmpty()) {
-                        LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element: {} - {} ({})",
-                            field.getName(), description, selector);
-                    } else if (LoggingConfigUtil.isVerboseLoggingEnabled()) {
-                        LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element: {} ({})",
-                            field.getName(), selector);
+                        if (LoggingConfigUtil.isVerboseLoggingEnabled() && !description.isEmpty()) {
+                            LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element: {} - {} ({})",
+                                field.getName(), description, selector);
+                        } else if (LoggingConfigUtil.isVerboseLoggingEnabled()) {
+                            LoggingConfigUtil.logDebugIfVerbose(logger, "Initialized element: {} ({})",
+                                field.getName(), selector);
+                        }
                     }
                 } catch (IllegalAccessException e) {
                     LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to initialize field: {}", field.getName(), e);
@@ -111,6 +128,26 @@ public abstract class BasePage {
                 }
             }
         }
+    }
+
+    /**
+     * 检查字段类型是否为 List<PageElement>
+     */
+    private boolean isListPageElement(Field field) {
+        if (!java.util.List.class.isAssignableFrom(field.getType())) {
+            return false;
+        }
+        
+        // 检查泛型类型
+        java.lang.reflect.Type genericType = field.getGenericType();
+        if (genericType instanceof java.lang.reflect.ParameterizedType) {
+            java.lang.reflect.ParameterizedType pType = (java.lang.reflect.ParameterizedType) genericType;
+            java.lang.reflect.Type[] typeArgs = pType.getActualTypeArguments();
+            if (typeArgs.length == 1 && typeArgs[0].equals(PageElement.class)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -736,6 +773,132 @@ public abstract class BasePage {
     }
 
     /**
+     * 切换到指定索引的页面
+     * 线程安全：使用ThreadLocal确保每个线程有独立的当前页面实例
+     * 
+     * @param pageIndex 页面索引（0-based）
+     * 
+     * 使用示例：
+     * <pre>
+     * // 切换到第一个页面
+     * switchToPage(0);
+     * 
+     * // 切换到第二个页面
+     * switchToPage(1);
+     * </pre>
+     */
+    public void switchToPage(int pageIndex) {
+        try {
+            BrowserContext context = getContext();
+            List<Page> pages = context.pages();
+            
+            if (pageIndex < 0 || pageIndex >= pages.size()) {
+                throw new IndexOutOfBoundsException(
+                    "Page index out of bounds: " + pageIndex + ", available pages: " + pages.size());
+            }
+            
+            Page targetPage = pages.get(pageIndex);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Switching to page {} of {}: {}", 
+                pageIndex + 1, pages.size(), targetPage.url());
+            
+            // 更新当前页面
+            page = targetPage;
+            
+            // 更新当前线程的Page实例
+            setCurrentPage();
+            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Successfully switched to page {}", pageIndex + 1);
+            
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to switch to page: {}", pageIndex, e);
+            throw new RuntimeException("Failed to switch to page: " + pageIndex, e);
+        }
+    }
+
+    /**
+     * 切换到最新打开的页面（最后一个页面）
+     * 线程安全：使用ThreadLocal确保每个线程有独立的当前页面实例
+     * 
+     * 使用示例：
+     * <pre>
+     * // 点击链接打开新页面后，切换到最新页面
+     * link.click();
+     * switchToLatestPage();
+     * type("#search", "hello");
+     * </pre>
+     */
+    public void switchToLatestPage() {
+        try {
+            BrowserContext context = getContext();
+            List<Page> pages = context.pages();
+            
+            if (pages.isEmpty()) {
+                throw new IllegalStateException("No pages available");
+            }
+            
+            Page latestPage = pages.get(pages.size() - 1);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Switching to latest page: {}", latestPage.url());
+            
+            // 更新当前页面
+            page = latestPage;
+            
+            // 更新当前线程的Page实例
+            setCurrentPage();
+            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Successfully switched to latest page");
+            
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to switch to latest page", e);
+            throw new RuntimeException("Failed to switch to latest page", e);
+        }
+    }
+
+    /**
+     * 关闭当前页面并切换到上一个页面
+     * 线程安全：使用ThreadLocal确保每个线程有独立的当前页面实例
+     * 
+     * 使用示例：
+     * <pre>
+     * // 打开新页面并操作
+     * switchToLatestPage();
+     * type("#search", "hello");
+     * 
+     * // 关闭当前页面并返回上一个页面
+     * closeCurrentPageAndSwitchBack();
+     * type("#continue", "data");
+     * </pre>
+     */
+    public void closeCurrentPageAndSwitchBack() {
+        try {
+            BrowserContext context = getContext();
+            List<Page> pages = context.pages();
+            
+            if (pages.size() <= 1) {
+                throw new IllegalStateException("Cannot close the only page");
+            }
+            
+            // 关闭当前页面
+            page.close();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Closed current page");
+            
+            // 切换到最后一个页面（通常是上一个页面）
+            Page lastPage = pages.get(pages.size() - 1);
+            
+            // 更新当前页面
+            page = lastPage;
+            
+            // 更新当前线程的Page实例
+            setCurrentPage();
+            
+            LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Switched back to previous page");
+            
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to close current page and switch back", e);
+            throw new RuntimeException("Failed to close current page and switch back", e);
+        }
+    }
+
+    /**
      * 刷新页面
      */
     public void refresh() {
@@ -1118,294 +1281,7 @@ public abstract class BasePage {
         }
     }
 
-    /**
-     * 断言元素文本包含指定文本（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @param expectedText 期望的文本
-     * @throws AssertionError 如果元素文本不包含期望文本
-     */
-    public void assertTextContains(String selector, String expectedText) {
-        String actualText = getText(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' contains text: '{}'", selector, expectedText);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' text should contain '" + expectedText + "'",
-            actualText,
-            Matchers.containsString(expectedText)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' contains '{}'", selector, expectedText);
-    }
 
-    /**
-     * 验证元素文本是否等于指定文本（非断言，返回boolean）
-     */
-    public boolean textEquals(String selector, String expectedText) {
-        try {
-            String actualText = getText(selector);
-            boolean equals = actualText.equals(expectedText);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Text verification - Element '{}' equals '{}': {}", selector, expectedText, equals);
-            return equals;
-        } catch (Exception e) {
-            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify text equals for element: {}", selector, e);
-            throw new RuntimeException("Failed to verify text equals for element: " + selector, e);
-        }
-    }
-
-    /**
-     * 断言元素文本等于指定文本（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @param expectedText 期望的文本
-     * @throws AssertionError 如果元素文本不等于期望文本
-     */
-    public void assertTextEquals(String selector, String expectedText) {
-        String actualText = getText(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' equals text: '{}'", selector, expectedText);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' text should equal '" + expectedText + "'",
-            actualText,
-            Matchers.equalTo(expectedText)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' equals '{}'", selector, expectedText);
-    }
-
-    /**
-     * 验证元素文本是否匹配正则表达式（非断言，返回boolean）
-     */
-    public boolean textMatches(String selector, String regex) {
-        try {
-            String actualText = getText(selector);
-            boolean matches = Pattern.matches(regex, actualText);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Text verification - Element '{}' matches '{}': {}", selector, regex, matches);
-            return matches;
-        } catch (Exception e) {
-            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to verify text matches for element: {}", selector, e);
-            throw new RuntimeException("Failed to verify text matches for element: " + selector, e);
-        }
-    }
-
-    /**
-     * 断言元素文本匹配正则表达式（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @param regex 正则表达式
-     * @throws AssertionError 如果元素文本不匹配正则表达式
-     */
-    public void assertTextMatches(String selector, String regex) {
-        String actualText = getText(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' matches regex: '{}'", selector, regex);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' text should match pattern '" + regex + "'",
-            actualText,
-            Matchers.matchesPattern(regex)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' matches regex '{}'", selector, regex);
-    }
-
-    /**
-     * 断言元素可见（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素不可见
-     */
-    public void assertVisible(String selector) {
-        boolean visible = isVisible(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is visible", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should be visible",
-            visible,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is visible", selector);
-    }
-
-    /**
-     * 断言元素不可见（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素可见
-     */
-    public void assertNotVisible(String selector) {
-        boolean visible = isVisible(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is not visible", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should not be visible",
-            visible,
-            Matchers.is(false)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is not visible", selector);
-    }
-
-    /**
-     * 断言元素存在（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素不存在
-     */
-    public void assertExists(String selector) {
-        boolean exists = exists(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' exists", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should exist",
-            exists,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' exists", selector);
-    }
-
-    /**
-     * 断言元素不存在（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素存在
-     */
-    public void assertNotExists(String selector) {
-        boolean exists = exists(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' does not exist", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should not exist",
-            exists,
-            Matchers.is(false)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' does not exist", selector);
-    }
-
-    /**
-     * 断言元素被选中（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素未被选中
-     */
-    public void assertChecked(String selector) {
-        boolean checked = isChecked(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is checked", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should be checked",
-            checked,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is checked", selector);
-    }
-
-    /**
-     * 断言元素未被选中（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素被选中
-     */
-    public void assertNotChecked(String selector) {
-        boolean checked = isChecked(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is not checked", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should not be checked",
-            checked,
-            Matchers.is(false)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is not checked", selector);
-    }
-
-    /**
-     * 断言元素启用（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素未启用
-     */
-    public void assertEnabled(String selector) {
-        boolean enabled = isEnabled(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is enabled", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should be enabled",
-            enabled,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is enabled", selector);
-    }
-
-    /**
-     * 断言元素禁用（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素未被禁用
-     */
-    public void assertDisabled(String selector) {
-        boolean disabled = isDisabled(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is disabled", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should be disabled",
-            disabled,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is disabled", selector);
-    }
-
-    /**
-     * 断言元素可点击（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素不可点击
-     */
-    public void assertClickable(String selector) {
-        boolean clickable = isElementClickable(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is clickable", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should be clickable",
-            clickable,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is clickable", selector);
-    }
-
-    /**
-     * 断言页面包含指定文本（使用 Hamcrest 断言）
-     * @param text 期望的文本
-     * @throws AssertionError 如果页面不包含指定文本
-     */
-    public void assertPageContainsText(String text) {
-        String pageContent = page.content();
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting page contains text: '{}'", text);
-        MatcherAssert.assertThat(
-            "Page should contain text '" + text + "'",
-            pageContent,
-            Matchers.containsString(text)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Page contains text '{}'", text);
-    }
-
-    /**
-     * 断言页面源代码包含指定文本（使用 Hamcrest 断言）
-     * @param text 期望的文本
-     * @throws AssertionError 如果页面源代码不包含指定文本
-     */
-    public void assertPageSourceContains(String text) {
-        String pageSource = getPageSource();
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting page source contains text: '{}'", text);
-        MatcherAssert.assertThat(
-            "Page source should contain text '" + text + "'",
-            pageSource,
-            Matchers.containsString(text)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Page source contains text '{}'", text);
-    }
-
-    /**
-     * 断言元素可访问（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素不可访问
-     */
-    public void assertAccessible(String selector) {
-        boolean accessible = isAccessible(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' is accessible", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should be accessible",
-            accessible,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' is accessible", selector);
-    }
-
-    /**
-     * 断言元素有 ARIA 标签（使用 Hamcrest 断言）
-     * @param selector 元素选择器
-     * @throws AssertionError 如果元素没有 ARIA 标签
-     */
-    public void assertHasAriaLabel(String selector) {
-        boolean hasLabel = hasAriaLabel(selector);
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Asserting element '{}' has aria-label", selector);
-        MatcherAssert.assertThat(
-            "Element '" + selector + "' should have aria-label",
-            hasLabel,
-            Matchers.is(true)
-        );
-        LoggingConfigUtil.logInfoIfVerbose(logger, "✓ Assertion passed - Element '{}' has aria-label", selector);
-    }
 
     // ==================== 表单操作方法 ====================
 
@@ -1597,27 +1473,6 @@ public abstract class BasePage {
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get page count", e);
             throw new RuntimeException("Failed to get page count", e);
-        }
-    }
-
-    /**
-     * 切换到指定索引的页面
-     * @param index 页面索引
-     */
-    public void switchToPage(int index) {
-        try {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Switching to page with index: {}", index);
-            ensureContextValid();
-            List<Page> pages = context.pages();
-            if (index >= 0 && index < pages.size()) {
-                page = pages.get(index);
-                LoggingConfigUtil.logInfoIfVerbose(logger, "Switched to page: {}", index);
-            } else {
-                throw new RuntimeException("Invalid page index: " + index + ". Available pages: " + pages.size());
-            }
-        } catch (Exception e) {
-            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to switch to page: {}", index, e);
-            throw new RuntimeException("Failed to switch to page: " + index, e);
         }
     }
 
