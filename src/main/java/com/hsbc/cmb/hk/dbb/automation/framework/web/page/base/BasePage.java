@@ -1798,11 +1798,7 @@ public abstract class BasePage {
         }
     }
 
-    /**
-     * 检查元素是否可点击
-     * @param selector 元素选择器
-     * @return 如果元素可点击则返回true，否则返回false
-     */
+
     /**
      * 检查元素是否可点击（带隐式等待）
      * 元素可点击需要同时满足：可见且启用

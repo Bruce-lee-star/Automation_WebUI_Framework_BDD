@@ -1,7 +1,5 @@
 package com.hsbc.cmb.hk.dbb.automation.tests.steps;
 
-import com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring.ApiMonitorAndMockManager;
-import com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring.RealApiMonitor;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.session.SessionManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.factory.PageObjectFactory;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.HomePage;
@@ -12,100 +10,114 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Login related test steps - supports skip login functionality
+ * Login related test steps - 超简化版，使用新的框架层 API
  * <p>
- * Description:
- * - The same user only needs to log in once during entire test run
- * - Use SessionManager to manage user login status
- * - Support Cookie and LocalStorage persistence
+ * 设计理念：
+ * 1. 业务层只负责业务逻辑（登录、切换 profile）
+ * 2. 框架层负责 session 管理和自动恢复
+ * 3. 业务层只传递 session key
+ * <p>
+ * 使用方式：
+ * <pre>
+ * @Given("logon DBB {string} environment as user {string}")
+ * public void logonDBBEnvironmentAsUser(String env, String username) {
+ *     // 生成 session key
+ *     String sessionKey = env + "_" + username;
+ *
+ *     // 【核心】让框架自动处理 session
+ *     if (SessionManager.prepareSession(sessionKey)) {
+ *         // Session 已准备好，框架已设置 storageStatePath
+ *         // 导航到首页（session 会自动应用）
+ *         loginPage.navigateTo("https://example.com/home");
+ *
+ *         // 验证 session 是否有效
+ *         if (!loginPage.getCurrentUrl().contains("/logon")) {
+ *             homePage.quickLink.waitForVisible(30);
+ *             return; // Session 有效，跳过登录
+ *         }
+ *     }
+ *
+ *     // Session 无效，执行登录
+ *     performLogin(sessionKey);
+ * }
+ * </pre>
  */
 public class LoginSteps {
     private static final Logger logger = LoggerFactory.getLogger(LoginSteps.class);
-    private static final LoginPage loginPage = PageObjectFactory.getPage(LoginPage.class);
-    private static final HomePage homePage = PageObjectFactory.getPage(HomePage.class);
+
+    // PageObject 字段（非静态初始化）
+    // BasePage 构造函数不会创建 Context，Context 只在实际使用时创建
+    private LoginPage loginPage = PageObjectFactory.getPage(LoginPage.class);
+    private HomePage homePage = PageObjectFactory.getPage(HomePage.class);
+
+    // 状态变量
     private String currentUrl;
+    private String sessionKey;
 
     @Step
     public void logonDBBEnvironmentAsUser(String env, String username) {
+        // 准备登录信息
         BDDUtils logonDBBInfo = BDDUtils.getLogonDBBInfo(env, username);
         BDDUtils.setCurrentLoginInfo(logonDBBInfo);
         currentUrl = BDDUtils.getCurrentUrl();
 
+        // 生成 session key
+        sessionKey = generateSessionKey(env, username);
+
         logger.info("========================================");
-        logger.info("LoginSteps - User: {}, Environment: {}", username, env);
+        logger.info("LoginSteps - SessionKey: {}", sessionKey);
         logger.info("========================================");
 
-        // 监控所有 API 响应，打印完整信息
-        setupApiMonitoring();
-
-        // 【简化】尝试恢复Session并跳过登录（如果可用）
-        boolean skippedLogin = tryRestoreSessionAndNavigate(env, username);
-        if (skippedLogin) {
-            return; // Session已恢复，跳过登录
-        }
-
-        // Perform full login flow
-        performLogin(env);
-    }
-
-    /**
-     * 【简化】尝试恢复Session并导航到首页
-     *
-     * @param env      Environment identifier
-     * @param username Username
-     * @return true表示成功恢复session并跳过登录，false表示需要执行登录
-     */
-    private boolean tryRestoreSessionAndNavigate(String env, String username) {
-        // 检查并尝试恢复session
-        if (!SessionManager.restoreSession(env, username)) {
-            return false;
-        }
-
-        String sessionKey = env + "_" + username;
-        logger.info(" Session restored successfully for: {}", sessionKey);
-
-        // 获取保存的home URL并导航
-        SessionManager.UserSession userSession = SessionManager.loadSession(env, username);
-        String homeUrl = userSession != null ? userSession.getHomeUrl() : null;
-
-        if (homeUrl != null && !homeUrl.isEmpty()) {
-            logger.info("Navigating to saved home URL: {}", homeUrl);
-            loginPage.navigateTo(homeUrl);
-            if (!homePage.quickLink.isVisible()){
-                SessionManager.clearSession(env, username);
-                return false;
+        // 【核心】让框架自动处理 session
+        // 注意：prepareSession()已在LogonGlue中提前调用
+        // 框架已经：
+        // 1. 检查 session 文件是否存在且未过期
+        // 2. 如果存在，读取 homeUrl 并设置 storageStatePath
+        // 3. 延迟Context创建，直到业务层真正需要时才创建
+        //
+        // 这里只需要检查session是否有效，然后决定是否跳过登录
+        if (SessionManager.hasSession(sessionKey)) {
+            // Session 已准备好，框架已设置 storageStatePath
+            
+            // 【关键】从 meta 文件读取 homeUrl
+            String homeUrl = SessionManager.loadHomeUrl(sessionKey);
+            if (homeUrl == null || homeUrl.isEmpty()) {
+                logger.warn("Session file exists but no homeUrl found, cannot skip login");
+                SessionManager.clearSession(sessionKey);
+                performLogin();
+                return;
             }
+
+            logger.info("Session restored, navigating to homeUrl: {}", homeUrl);
+            loginPage.navigateTo(homeUrl);
+
+            // 验证 session 是否有效
+            String currentUrl = loginPage.getCurrentUrl();
+            logger.info("Current URL after navigation: {}", currentUrl);
+
+            if (currentUrl.contains("/logon")) {
+                logger.warn("Session invalid (redirected to login page)");
+                SessionManager.clearSession(sessionKey);
+                performLogin();
+                return;
+            }
+
+            // Session 有效，等待首页元素
             homePage.quickLink.waitForVisible(30);
-            logger.info(" Skip login successful - user already logged in and navigated to home page");
-
-            // 【重要】跳过登录后，保存更新后的homeUrl和更新session时间戳
-            String currentHomeUrl = loginPage.getCurrentUrl();
-            SessionManager.saveSessionAfterLogin(env, username, currentHomeUrl);
-            logger.info("Session updated after skip login with new home URL: {}", currentHomeUrl);
-        } else {
-            // Fallback: navigate to login page and refresh
-            loginPage.navigateTo(currentUrl);
-            loginPage.refresh();
-            logger.info(" Skip login successful - user already logged in (no home URL saved)");
-
-            // 【重要】跳过登录后，更新session
-            String currentHomeUrl = loginPage.getCurrentUrl();
-            SessionManager.saveSessionAfterLogin(env, username, currentHomeUrl);
-            logger.info("Session updated after skip login with current URL: {}", currentHomeUrl);
+            logger.info("Session validated successfully, skipping login");
+            return; // Session 有效，跳过登录
         }
 
-        return true; // Session已恢复并更新
+        // Session 无效或不存在，执行登录
+        performLogin();
     }
 
     /**
-     * Perform full login flow
-     *
-     * @param env Environment identifier
+     * 执行完整登录流程
      */
-    private void performLogin(String env) {
+    private void performLogin() {
         String username = BDDUtils.getCurrentUsername();
-        String sessionKey = env + "_" + username;  // 使用推荐的env_username格式
-        logger.info("Performing login for: {}", sessionKey);
+        logger.info("No valid session, performing login for: {}", sessionKey);
 
         loginPage.navigateTo(currentUrl);
         loginPage.userNameIpt.type(username);
@@ -122,73 +134,39 @@ public class LoginSteps {
         }
         homePage.quickLink.waitForVisible(30);
 
+        // 【核心】让框架自动保存 session
+        // 业务层只传递 session key 和 homeUrl
+        // 框架会自动：
+        // 1. 获取当前 context
+        // 2. 使用 Playwright API 保存 storageState 到文件
+        // 3. 保存元数据（homeUrl + timestamp）
         String homeUrl = loginPage.getCurrentUrl();
-        SessionManager.saveSessionAfterLogin(env, username, homeUrl);
-    }
+        SessionManager.saveCurrentSession(sessionKey, homeUrl);
 
-    /**
-     * 设置全面的 API 监控，只监控真正的 API 调用，过滤掉 JS、CSS 等静态资源
-     */
-    private void setupApiMonitoring() {
-        // 只监控 /services/rest/ 路径下的 API 请求，不进行实时验证
-        RealApiMonitor.startMonitoring(loginPage.getPage().context(), ".*services/rest/.*");
-        // 设置监控在200秒后自动停止
-        RealApiMonitor.stopMonitoringAfterSeconds(loginPage.getPage().context(), 200);
-        logger.info(" API monitoring enabled - only REST API calls will be logged (no validation)");
+        logger.info("Login completed and session saved");
     }
 
     /**
      * 切换 Profile
-     * Profile 切换会导致旧 session 销毁，新 session 创建
-     * 必须等待切换完成后才能保存 session
-     *
-     * @param profile 目标 profile 名称
      */
     private void switchProfile(String profile) {
-        logger.info("Starting profile switch to: {}", profile);
-        logger.info("Current URL before switch: {}", loginPage.getCurrentUrl());
-
         homePage.profileSwitcher.waitForVisible(30).click();
-        logger.info("Clicked profile switcher");
-
         homePage.locator(String.format("//span[text()='%s']", profile)).click();
         logger.info("Clicked profile: {}", profile);
-
-        // Wait longer for switch to process and page to reload
-        logger.info("Waiting for page reload after profile switch...");
-        try {
-            // Wait for URL to change or page to reload
-            Thread.sleep(5000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-
-        logger.info("Current URL after click: {}", loginPage.getCurrentUrl());
-        logger.info("Checking if quickLink is visible...");
-
-        // Give more time for quickLink to appear
-        logger.info("Waiting for quickLink to appear...");
-        try {
-            Thread.sleep(3000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-
-        if (!homePage.quickLink.isVisible()){
-            logger.info(" quickLink is NOT visible - profile switch failed!");
-            logger.info("Page URL: {}", loginPage.getCurrentUrl());
-            logger.info("Checking if page has loaded properly...");
-            // Try to get page title for debugging
-            try {
-                String pageTitle = loginPage.getPage().title();
-                logger.info("Page title: {}", pageTitle);
-            } catch (Exception e) {
-                logger.info("Failed to get page title: {}", e.getMessage());
-            }
+        if (!homePage.quickLink.isVisible()) {
             throw new RuntimeException("Profile switch failed with " + profile);
         }
-
-        logger.info(" quickLink is visible - profile switch successful");
         homePage.quickLink.waitForVisible(30);
+
+        // 切换 profile 后保存 session
+        String homeUrl = loginPage.getCurrentUrl();
+        SessionManager.saveCurrentSession(sessionKey, homeUrl);
+    }
+
+    /**
+     * 生成 session key
+     */
+    private String generateSessionKey(String env, String username) {
+        return env + "_" + username;
     }
 }

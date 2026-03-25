@@ -4,6 +4,7 @@ import com.hsbc.cmb.hk.dbb.automation.framework.web.page.factory.PageObjectFacto
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.TimeoutConfig;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.ColorScheme;
+import com.microsoft.playwright.options.Geolocation;
 import com.microsoft.playwright.options.LoadState;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.config.BrowserOverrideManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.config.FrameworkConfig;
@@ -68,6 +69,20 @@ public class PlaywrightManager {
     private static final ThreadLocal<Page> pageThreadLocal = new ThreadLocal<>();
     private static final List<Process> downloadProcesses = new ArrayList<>();
 
+    // ==================== 自定义 Context 选项（用户自定义优先于框架配置） ====================
+    private static final ThreadLocal<Boolean> customContextOptionsFlag = new ThreadLocal<>();
+    private static final ThreadLocal<Path> customStorageStatePath = new ThreadLocal<>();
+    private static final ThreadLocal<String> customLocale = new ThreadLocal<>();
+    private static final ThreadLocal<String> customTimezoneId = new ThreadLocal<>();
+    private static final ThreadLocal<String> customUserAgent = new ThreadLocal<>();
+    private static final ThreadLocal<List<String>> customPermissions = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> customIsMobile = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> customHasTouch = new ThreadLocal<>();
+    private static final ThreadLocal<ColorScheme> customColorScheme = new ThreadLocal<>();
+    private static final ThreadLocal<Geolocation> customGeolocation = new ThreadLocal<>();
+    private static final ThreadLocal<Integer> customDeviceScaleFactor = new ThreadLocal<>();
+    private static final ThreadLocal<Integer> customViewportWidth = new ThreadLocal<>();
+    private static final ThreadLocal<Integer> customViewportHeight = new ThreadLocal<>();
     // 配置标识
     private static String currentConfigId;
 
@@ -826,6 +841,8 @@ public class PlaywrightManager {
 
     /**
      * 创建并获取 BrowserContext（线程安全）
+     * <p>
+     * 支持延迟重建机制：当检测到自定义配置时,自动重建Context
      */
     public static BrowserContext getContext() {
         if (!frameworkState.isInitialized()) {
@@ -833,7 +850,16 @@ public class PlaywrightManager {
         }
 
         BrowserContext context = contextThreadLocal.get();
-        if (context == null || !context.browser().isConnected()) {
+        
+        // 检测是否需要重建Context（因为设置了自定义配置）
+        Boolean customFlag = customContextOptionsFlag.get();
+        if (context != null && customFlag != null && customFlag) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Custom context options detected, recreating context to apply them...");
+            recreateContextIfCustomConfigNeeded();
+            context = null; // 强制重新创建
+        }
+        
+        if (context == null || (context.browser() != null && !context.browser().isConnected())) {
             context = createContext();
             contextThreadLocal.set(context);
         }
@@ -841,7 +867,266 @@ public class PlaywrightManager {
     }
 
     /**
+     * 调度 Context 重建（延迟重建机制）
+     * <p>
+     * 当设置自定义配置时调用此方法，标记需要重建 Context
+     * 实际重建会在下次 getContext() 或 getPage() 时执行
+     * 这样可以支持多次设置自定义配置只触发一次Context重建
+     */
+    private static void scheduleContextRebuild() {
+        // 清空现有的 Page，确保下次操作会触发重建
+        Page existingPage = pageThreadLocal.get();
+        if (existingPage != null && !existingPage.isClosed()) {
+            try {
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Clearing existing page to force context rebuild");
+                existingPage.close();
+            } catch (Exception e) {
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Failed to clear existing page: {}", e.getMessage());
+            }
+        }
+        pageThreadLocal.remove();
+        
+        // customContextOptionsFlag 已经在各个 setCustom*() 方法中被设置为 true
+        // 不需要在这里设置，因为调用此方法前已经设置过了
+    }
+
+
+    /**
+     * 设置自定义 Context 选项标志
+     * <p>
+     * 注意：通常不需要手动调用此方法
+     * - 调用任何 setCustom*() 方法（如 setCustomLocale(), setStorageStatePath() 等）会自动设置此标志为 true
+     * - 此方法主要用于显式禁用自定义配置（设置为 false）或内部框架使用
+     *
+     * @param contextOptionsFlag 是否启用自定义配置（true: 启用，false: 禁用）
+     */
+    public static void setCustomContextOptionsFlag(Boolean contextOptionsFlag){
+        customContextOptionsFlag.set(contextOptionsFlag);
+    }
+
+    /**
+     * 设置自定义 StorageState 路径（用于 session 恢复）
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 如果 Context 已存在，会关闭它以便应用新配置（确保 session 恢复生效）
+     * <p>
+     * 注意：此方法是特殊处理，因为 session 恢复需要在 Context 创建时应用 storageState
+     *
+     * @param storageStatePath StorageState 文件路径
+     */
+    public static void setStorageStatePath(Path storageStatePath) {
+        customStorageStatePath.set(storageStatePath);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom storageStatePath set: {} (custom context options auto-enabled)", storageStatePath);
+
+        // 【关键】如果 Context 已存在，需要重建它以应用 storageState
+        // 使用延迟重建机制：设置标记，在下次 getContext() 或 getPage() 时重建
+        // 这样可以支持多次设置自定义配置只触发一次Context重建
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 如果 Context 已存在且设置了自定义配置，重建它
+     * <p>
+     * 此方法用于在需要应用自定义配置时关闭现有Context
+     * 会在以下情况调用：
+     * - getContext() 检测到自定义配置时
+     * - 确保所有自定义配置（包括 storageState）都能正确应用
+     */
+    private static void recreateContextIfCustomConfigNeeded() {
+        BrowserContext existingContext = contextThreadLocal.get();
+        if (existingContext != null) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Context already exists, closing it to apply custom configurations...");
+            try {
+                // 关闭 Page
+                Page existingPage = pageThreadLocal.get();
+                if (existingPage != null && !existingPage.isClosed()) {
+                    existingPage.close();
+                }
+                pageThreadLocal.remove();
+                
+                // 关闭 Context（只有浏览器还连接着才关闭）
+                if (existingContext.browser() != null && existingContext.browser().isConnected()) {
+                    existingContext.close();
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to close existing context: {}", e.getMessage());
+            } finally {
+                contextThreadLocal.remove();
+            }
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Context closed, will create new one with custom configurations on next access");
+        }
+    }
+
+    /**
+     * 设置自定义 Locale
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param locale Locale 字符串（如 "zh-CN", "en-US"）
+     */
+    public static void setCustomLocale(String locale) {
+        customLocale.set(locale);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom locale set: {} (custom context options auto-enabled)", locale);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Timezone
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param timezoneId Timezone ID（如 "Asia/Shanghai", "America/New_York"）
+     */
+    public static void setCustomTimezone(String timezoneId) {
+        customTimezoneId.set(timezoneId);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom timezoneId set: {} (custom context options auto-enabled)", timezoneId);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 User Agent
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param userAgent User-Agent 字符串
+     */
+    public static void setCustomUserAgent(String userAgent) {
+        customUserAgent.set(userAgent);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom userAgent set: {} (custom context options auto-enabled)", userAgent);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Permissions
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param permissions 权限列表（如 List.of("geolocation", "notifications")）
+     */
+    public static void setCustomPermissions(List<String> permissions) {
+        customPermissions.set(permissions);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom permissions set: {} (custom context options auto-enabled)", permissions);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Mobile 标识
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param isMobile 是否为移动设备
+     */
+    public static void setCustomIsMobile(boolean isMobile) {
+        customIsMobile.set(isMobile);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom isMobile set: {} (custom context options auto-enabled)", isMobile);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Touch 标识
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param hasTouch 是否支持触摸
+     */
+    public static void setCustomHasTouch(boolean hasTouch) {
+        customHasTouch.set(hasTouch);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom hasTouch set: {} (custom context options auto-enabled)", hasTouch);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Color Scheme
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param colorScheme 颜色方案（如 ColorScheme.LIGHT, ColorScheme.DARK）
+     */
+    public static void setCustomColorScheme(ColorScheme colorScheme) {
+        customColorScheme.set(colorScheme);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom colorScheme set: {} (custom context options auto-enabled)", colorScheme);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Geolocation
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param latitude 纬度
+     * @param longitude 经度
+     */
+    public static void setCustomGeolocation(double latitude, double longitude) {
+        customGeolocation.set(new Geolocation(latitude, longitude));
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom geolocation set: ({}, {}) (custom context options auto-enabled)", latitude, longitude);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Device Scale Factor
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param deviceScaleFactor 设备缩放因子（如 1.0, 2.0, 3.0）
+     */
+    public static void setCustomDeviceScaleFactor(double deviceScaleFactor) {
+        customDeviceScaleFactor.set((int) (deviceScaleFactor * 100)); // 存储为整数避免浮点精度问题
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom deviceScaleFactor set: {} (custom context options auto-enabled)", deviceScaleFactor);
+        scheduleContextRebuild();
+    }
+
+    /**
+     * 设置自定义 Viewport 尺寸
+     * 自定义配置优先于框架默认配置
+     * <p>
+     * 调用此方法会自动启用自定义配置模式（setCustomContextOptionsFlag(true)）
+     * 配置会在下一次创建 Context 时生效
+     *
+     * @param width  宽度
+     * @param height 高度
+     */
+    public static void setCustomViewportSize(int width, int height) {
+        customViewportWidth.set(width);
+        customViewportHeight.set(height);
+        customContextOptionsFlag.set(true); // 自动启用自定义配置
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom viewportSize set: {}x{} (custom context options auto-enabled)", width, height);
+        scheduleContextRebuild();
+    }
+
+    /**
      * 获取 Page（线程安全）
+     * <p>
+     * 支持延迟重建机制：在获取 Page 时检查是否需要重建 Context
+     * 先调用 getContext() 确保重建检查被执行
      */
     public static Page getPage() {
         if (!frameworkState.isInitialized()) {
@@ -850,29 +1135,58 @@ public class PlaywrightManager {
 
         Page page = pageThreadLocal.get();
         if (page == null || page.isClosed()) {
-            page = createPage();
+            // 创建 Page 前先检查 Context，确保自定义配置被应用
+            BrowserContext context = getContext();
+            page = createPage(context);
             pageThreadLocal.set(page);
         }
+        return page;
+    }
+
+    /**
+     * 创建新的 Page（使用指定的 Context）
+     */
+    private static Page createPage(BrowserContext context) {
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Creating new Page...");
+        Page page = context.newPage();
+
+        // 页面稳定化：防止页面加载过程中出现缩放行为
+        stabilizePage(page);
+
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Page created successfully");
         return page;
     }
 
     // ==================== Context 和 Page 创建方法 ====================
 
     /**
-     * 创建新的 BrowserContext
+     * 创建新的 BrowserContext（保证场景间配置隔离）
+     * <p>
+     * 核心机制：
+     * 1. 每次都创建全新的默认配置对象，杜绝场景间配置残留
+     * 2. 仅当 customContextOptionsFlag=true 时，才叠加自定义配置
+     * 3. Context 创建后立即重置 customContextOptionsFlag，确保下一次访问不会重复重建
+     * 4. 自定义配置的数据在 scenario 结束时通过 cleanupForScenario 重置
      */
     private static BrowserContext createContext() {
         LoggingConfigUtil.logInfoIfVerbose(logger, "Creating new BrowserContext...");
 
         Browser currentBrowser = getBrowser();
+        // 关键：每次都新建全新的默认配置对象，杜绝场景间配置残留
         Browser.NewContextOptions contextOptions = new Browser.NewContextOptions();
 
-        // 配置视口大小
+        // 1. 先配置框架默认项（所有场景都需要的默认配置）
         configureViewport(contextOptions);
+        configureDefaultContextOptions(contextOptions);
 
-        // 配置其他 Context 选项
-        configureContextOptions(contextOptions);
+        // 2. 条件注入自定义配置（仅当 flag=true 时叠加）
+        Boolean customFlag = customContextOptionsFlag.get();
+        if (customFlag != null && customFlag) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Applying custom context options...");
+            configureCustomContextOptions(contextOptions);
+        }
 
+        // 初始化 Context
         BrowserContext context = currentBrowser.newContext(contextOptions);
 
         // 设置超时
@@ -881,40 +1195,21 @@ public class PlaywrightManager {
         // 启用 tracing（如果配置了）
         enableTracing(context);
 
+        // 【关键】Context创建成功后，立即重置customContextOptionsFlag
+        // 这样下一次getContext()调用不会误以为需要重建Context
+        if (customFlag != null && customFlag) {
+            customContextOptionsFlag.set(false);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Custom context options applied, flag reset to false");
+        }
+
         LoggingConfigUtil.logInfoIfVerbose(logger, "BrowserContext created successfully");
         return context;
     }
 
     /**
-     * 配置视口大小
+     * 配置框架默认 Context 选项（所有场景都会应用）
      */
-    private static void configureViewport(Browser.NewContextOptions contextOptions) {
-        Dimension screenSize = getAvailableScreenSize();
-        int screenWidth = (int) screenSize.getWidth();
-        int screenHeight = (int) screenSize.getHeight();
-
-        boolean maximizeWindow = isWindowMaximize();
-        String maximizeArgs = getWindowMaximizeArgs();
-        boolean hasStartMaximized = maximizeArgs.contains("--start-maximized");
-
-        if (maximizeWindow && !hasStartMaximized) {
-            // 使用逻辑分辨率作为 viewport（与浏览器窗口大小一致）
-            contextOptions.setViewportSize(screenWidth, screenHeight);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Window maximization enabled, viewport set to logical screen size: {}x{}", screenWidth, screenHeight);
-        } else if (!hasStartMaximized) {
-            int viewportWidth = getViewportWidth();
-            int viewportHeight = getViewportHeight();
-            contextOptions.setViewportSize(viewportWidth, viewportHeight);
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Using configured viewport size: {}x{} (explicit viewport, no maximization)", viewportWidth, viewportHeight);
-        } else {
-            LoggingConfigUtil.logInfoIfVerbose(logger, "Using browser auto-sizing (--start-maximized or no viewport specified)");
-        }
-    }
-
-    /**
-     * 配置 Context 选项
-     */
-    private static void configureContextOptions(Browser.NewContextOptions contextOptions) {
+    private static void configureDefaultContextOptions(Browser.NewContextOptions contextOptions) {
         // 设置 locale
         String locale = getContextLocale();
         contextOptions.setLocale(locale);
@@ -941,7 +1236,17 @@ public class PlaywrightManager {
         }
 
         // 设置地理位置
-        configureGeolocation(contextOptions);
+        String latitudeStr = getGeolocationLatitude();
+        String longitudeStr = getGeolocationLongitude();
+        if (latitudeStr != null && longitudeStr != null && !latitudeStr.isEmpty() && !longitudeStr.isEmpty()) {
+            try {
+                double latitude = Double.parseDouble(latitudeStr);
+                double longitude = Double.parseDouble(longitudeStr);
+                contextOptions.setGeolocation(latitude, longitude);
+            } catch (NumberFormatException e) {
+                logger.warn("Invalid geolocation values: {}, {}", latitudeStr, longitudeStr);
+            }
+        }
 
         // 设置设备缩放因子
         configureDeviceScaleFactor(contextOptions);
@@ -959,20 +1264,161 @@ public class PlaywrightManager {
     }
 
     /**
-     * 配置地理位置
+     * 配置自定义 Context 选项（仅在 customContextOptionsFlag=true 时应用）
+     * 自定义配置优先级高于框架默认配置
      */
-    private static void configureGeolocation(Browser.NewContextOptions contextOptions) {
-        String latitudeStr = getGeolocationLatitude();
-        String longitudeStr = getGeolocationLongitude();
-
-        if (latitudeStr != null && longitudeStr != null && !latitudeStr.isEmpty() && !longitudeStr.isEmpty()) {
-            try {
-                double latitude = Double.parseDouble(latitudeStr);
-                double longitude = Double.parseDouble(longitudeStr);
-                contextOptions.setGeolocation(latitude, longitude);
-            } catch (NumberFormatException e) {
-                logger.warn("Invalid geolocation values: {}, {}", latitudeStr, longitudeStr);
+    private static void configureCustomContextOptions(Browser.NewContextOptions contextOptions) {
+        // StorageState（session 恢复）
+        Path storagePath = customStorageStatePath.get();
+        if (storagePath != null) {
+            if (Files.exists(storagePath)) {
+                contextOptions.setStorageStatePath(storagePath);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom storageStatePath: {}", storagePath);
+            } else {
+                LoggingConfigUtil.logWarnIfVerbose(logger, "Custom storageStatePath does not exist: {}", storagePath);
             }
+        }
+
+        // Locale
+        String locale = customLocale.get();
+        if (locale != null && !locale.isEmpty()) {
+            contextOptions.setLocale(locale);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom locale: {}", locale);
+        }
+
+        // Timezone
+        String timezoneId = customTimezoneId.get();
+        if (timezoneId != null && !timezoneId.isEmpty()) {
+            contextOptions.setTimezoneId(timezoneId);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom timezoneId: {}", timezoneId);
+        }
+
+        // User Agent
+        String userAgent = customUserAgent.get();
+        if (userAgent != null && !userAgent.isEmpty()) {
+            contextOptions.setUserAgent(userAgent);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom userAgent: {}", userAgent);
+        }
+
+        // Permissions
+        List<String> permissions = customPermissions.get();
+        if (permissions != null && !permissions.isEmpty()) {
+            contextOptions.setPermissions(permissions);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom permissions: {}", permissions);
+        }
+
+        // Geolocation
+        Geolocation geolocation = customGeolocation.get();
+        if (geolocation != null) {
+            contextOptions.setGeolocation(geolocation.latitude, geolocation.longitude);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom geolocation: ({}, {})", geolocation.latitude, geolocation.longitude);
+        }
+
+        // Device Scale Factor
+        Integer scaleFactor = customDeviceScaleFactor.get();
+        if (scaleFactor != null) {
+            contextOptions.setDeviceScaleFactor(scaleFactor / 100.0);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom deviceScaleFactor: {}", scaleFactor / 100.0);
+        }
+
+        // Mobile 和 Touch
+        Boolean isMobile = customIsMobile.get();
+        if (isMobile != null) {
+            contextOptions.setIsMobile(isMobile);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom isMobile: {}", isMobile);
+        }
+
+        Boolean hasTouch = customHasTouch.get();
+        if (hasTouch != null) {
+            contextOptions.setHasTouch(hasTouch);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom hasTouch: {}", hasTouch);
+        }
+
+        // Color Scheme
+        ColorScheme colorScheme = customColorScheme.get();
+        if (colorScheme != null) {
+            contextOptions.setColorScheme(colorScheme);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom colorScheme: {}", colorScheme);
+        }
+
+        // Viewport
+        Integer customViewportWidthVal = customViewportWidth.get();
+        Integer customViewportHeightVal = customViewportHeight.get();
+        if (customViewportWidthVal != null && customViewportHeightVal != null) {
+            contextOptions.setViewportSize(customViewportWidthVal, customViewportHeightVal);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using custom viewportSize: {}x{}", customViewportWidthVal, customViewportHeightVal);
+        }
+    }
+
+    /**
+     * 重置所有自定义配置（核心：保证下一个场景默认不继承）
+     * 在创建 Context 后调用，确保场景隔离
+     */
+    private static void resetCustomContextOptions() {
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Resetting custom context options for next scenario...");
+        
+        // 重置 flag
+        customContextOptionsFlag.remove();
+        
+        // 重置所有自定义配置 ThreadLocal
+        customStorageStatePath.remove();
+        customLocale.remove();
+        customTimezoneId.remove();
+        customUserAgent.remove();
+        customPermissions.remove();
+        customIsMobile.remove();
+        customHasTouch.remove();
+        customColorScheme.remove();
+        customGeolocation.remove();
+        customDeviceScaleFactor.remove();
+        customViewportWidth.remove();
+        customViewportHeight.remove();
+        
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Custom context options reset completed");
+    }
+
+    /**
+     * 配置视口大小
+     * <p>
+     * 支持自定义 viewport（优先级高于框架默认配置）
+     */
+    private static void configureViewport(Browser.NewContextOptions contextOptions) {
+        // 【1】检查是否启用自定义配置
+        Boolean customContextFlag = customContextOptionsFlag.get();
+
+        // 【2】Viewport（自定义优先）
+        if (customContextFlag != null && customContextFlag) {
+            Integer customWidth = customViewportWidth.get();
+            Integer customHeight = customViewportHeight.get();
+
+            if (customWidth != null && customHeight != null) {
+                // 使用自定义 viewport
+                contextOptions.setViewportSize(customWidth, customHeight);
+                LoggingConfigUtil.logInfoIfVerbose(logger, "✅ Using custom viewport (priority over framework config): {}x{}", customWidth, customHeight);
+                return;
+            }
+        }
+
+        // 【3】使用框架默认配置
+        Dimension screenSize = getAvailableScreenSize();
+        int screenWidth = (int) screenSize.getWidth();
+        int screenHeight = (int) screenSize.getHeight();
+
+        boolean maximizeWindow = isWindowMaximize();
+        String maximizeArgs = getWindowMaximizeArgs();
+        boolean hasStartMaximized = maximizeArgs.contains("--start-maximized");
+
+        if (maximizeWindow && !hasStartMaximized) {
+            // 使用逻辑分辨率作为 viewport（与浏览器窗口大小一致）
+            contextOptions.setViewportSize(screenWidth, screenHeight);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Window maximization enabled, viewport set to logical screen size: {}x{}", screenWidth, screenHeight);
+        } else if (!hasStartMaximized) {
+            int viewportWidth = getViewportWidth();
+            int viewportHeight = getViewportHeight();
+            contextOptions.setViewportSize(viewportWidth, viewportHeight);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using configured viewport size: {}x{} (explicit viewport, no maximization)", viewportWidth, viewportHeight);
+        } else {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Using browser auto-sizing (--start-maximized or no viewport specified)");
         }
     }
 
@@ -1154,7 +1600,20 @@ public class PlaywrightManager {
             );
 
             // 使用 Playwright 的 setViewportSize 确保 viewport 与窗口大小一致
-            page.setViewportSize(logicalWidth, logicalHeight);
+            // 但要检查是否设置了自定义 viewport，如果是则不覆盖
+            Integer customViewportWidthVal = customViewportWidth.get();
+            Integer customViewportHeightVal = customViewportHeight.get();
+            
+            if (customViewportWidthVal != null && customViewportHeightVal != null) {
+                // 保持自定义 viewport，不覆盖
+                LoggingConfigUtil.logDebugIfVerbose(logger, "Custom viewport detected ({}x{}), skipping viewport size override", 
+                    customViewportWidth, customViewportHeight);
+            } else {
+                // 使用逻辑分辨率作为 viewport（与浏览器窗口大小一致）
+                page.setViewportSize(logicalWidth, logicalHeight);
+                LoggingConfigUtil.logDebugIfVerbose(logger, "No custom viewport, setting to logical screen size: {}x{}", 
+                    logicalWidth, logicalHeight);
+            }
 
             LoggingConfigUtil.logDebugIfVerbose(logger, "页面稳定化完成");
 
@@ -1414,6 +1873,9 @@ public class PlaywrightManager {
      */
     public static void cleanupForScenario() {
         LoggingConfigUtil.logDebugIfVerbose(logger, "Cleaning up for scenario...");
+
+        // 【关键】重置所有自定义配置,确保scenario之间配置隔离
+        resetCustomContextOptions();
 
         // 根据配置决定是否关闭 Context/Page 和浏览器
         String restartBrowserForEach = getRestartStrategy();
