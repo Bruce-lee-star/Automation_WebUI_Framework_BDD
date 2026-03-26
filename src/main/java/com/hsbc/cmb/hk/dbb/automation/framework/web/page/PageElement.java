@@ -610,4 +610,58 @@ public class PageElement {
 
     // ==================== 断言方法 ====================
 
+    // ==================== 新增方法 ====================
+
+    /**
+     * 点击元素（使用触摸方式）
+     * @return this 支持链式调用
+     */
+    public PageElement tap() {
+        getPage().tap(selector);
+        return this;
+    }
+
+    /**
+     * 聚焦到元素
+     * @return this 支持链式调用
+     */
+    public PageElement focus() {
+        getPage().focus(selector);
+        return this;
+    }
+
+    /**
+     * 获取元素的内部HTML
+     * @return 元素的内部HTML
+     */
+    public String innerHTML() {
+        return getPage().innerHTML(selector);
+    }
+
+    /**
+     * 获取元素的文本内容
+     * @return 元素的文本内容
+     */
+    public String textContent() {
+        return getPage().textContent(selector);
+    }
+
+    /**
+     * 检查元素是否隐藏
+     * @return 如果元素隐藏则返回true，否则返回false
+     */
+    public boolean isHidden() {
+        return getPage().isHidden(selector);
+    }
+
+    /**
+     * 带入文件到输入元素
+     * @param filePaths 文件路径数组
+     * @return this 支持链式调用
+     */
+    public PageElement setInputFiles(String... filePaths) {
+        getPage().setInputFiles(selector, filePaths);
+        return this;
+    }
+
 }

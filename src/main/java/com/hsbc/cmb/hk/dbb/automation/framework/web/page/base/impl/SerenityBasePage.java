@@ -636,6 +636,100 @@ public abstract class SerenityBasePage extends BasePage {
         super.scrollToElementCenter(targetSelector);
         addSerenityTestData("scrollToElementCenter", targetSelector);
     }
+
+    // ==================== 新增方法覆盖（Serenity集成版）====================
+
+    @Override
+    public void tap(String selector) {
+        super.tap(selector);
+        addSerenityTestData("tap", "element_" + selector);
+    }
+
+    @Override
+    public void focus(String selector) {
+        super.focus(selector);
+        addSerenityTestData("focus", "element_" + selector);
+    }
+
+    @Override
+    public String innerHTML(String selector) {
+        String html = super.innerHTML(selector);
+        addSerenityTestData("innerHTML", "element_" + selector);
+        return html;
+    }
+
+    @Override
+    public String textContent(String selector) {
+        String text = super.textContent(selector);
+        addSerenityTestData("textContent", "element_" + selector);
+        return text;
+    }
+
+    @Override
+    public boolean isHidden(String selector) {
+        boolean hidden = super.isHidden(selector);
+        addSerenityTestData("isHidden", "element_" + selector + "_" + hidden);
+        return hidden;
+    }
+
+    @Override
+    public boolean isClosed() {
+        boolean closed = super.isClosed();
+        addSerenityTestData("isClosed", closed);
+        return closed;
+    }
+
+    @Override
+    public void bringToFront() {
+        super.bringToFront();
+        addSerenityTestData("bringToFront", "completed");
+    }
+
+    @Override
+    public void setContent(String html) {
+        super.setContent(html);
+        addSerenityTestData("setContent", "completed");
+    }
+
+    @Override
+    public void setViewportSize(int width, int height) {
+        super.setViewportSize(width, height);
+        addSerenityTestData("setViewportSize", width + "x" + height);
+    }
+
+    @Override
+    public void setInputFiles(String selector, String... filePaths) {
+        super.setInputFiles(selector, filePaths);
+        addSerenityTestData("setInputFiles", "element_" + selector);
+    }
+
+    @Override
+    public com.microsoft.playwright.Locator byAltText(String altText) {
+        com.microsoft.playwright.Locator locator = super.byAltText(altText);
+        addSerenityTestData("byAltText", altText);
+        return locator;
+    }
+
+    @Override
+    public com.microsoft.playwright.Locator byRole(com.microsoft.playwright.options.AriaRole role) {
+        com.microsoft.playwright.Locator locator = super.byRole(role);
+        addSerenityTestData("byRole", role.toString());
+        return locator;
+    }
+
+    @Override
+    public com.microsoft.playwright.Locator byTitle(String title) {
+        com.microsoft.playwright.Locator locator = super.byTitle(title);
+        addSerenityTestData("byTitle", title);
+        return locator;
+    }
+
+    @Override
+    public com.microsoft.playwright.Locator byTestId(String testId) {
+        com.microsoft.playwright.Locator locator = super.byTestId(testId);
+        addSerenityTestData("byTestId", testId);
+        return locator;
+    }
 }
 
     // ==================== 断言方法（Serenity集成版）====================

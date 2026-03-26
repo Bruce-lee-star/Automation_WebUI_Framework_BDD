@@ -218,7 +218,7 @@ public abstract class BasePage {
     /**
      * 通过文本查找元素（包含指定文本）
      */
-    protected Locator byText(String text) {
+    public Locator byText(String text) {
         ensurePageValid();
         return page.getByText(text);
     }
@@ -226,7 +226,7 @@ public abstract class BasePage {
     /**
      * 通过文本查找元素（精确匹配）
      */
-    protected Locator byExactText(String text) {
+    public Locator byExactText(String text) {
         ensurePageValid();
         return page.getByText(text, new Page.GetByTextOptions().setExact(true));
     }
@@ -234,7 +234,7 @@ public abstract class BasePage {
     /**
      * 通过占位符查找输入框
      */
-    protected Locator byPlaceholder(String placeholder) {
+    public Locator byPlaceholder(String placeholder) {
         ensurePageValid();
         return page.getByPlaceholder(placeholder);
     }
@@ -242,33 +242,41 @@ public abstract class BasePage {
     /**
      * 通过标签查找元素
      */
-    protected Locator byLabel(String label) {
+    public Locator byLabel(String label) {
         ensurePageValid();
         return page.getByLabel(label);
     }
 
     /**
-     * 通过Alt文本查找图片
+     * 通过Alt文本查找元素
      */
-    protected Locator byAltText(String altText) {
+    public Locator byAltText(String altText) {
         ensurePageValid();
         return page.getByAltText(altText);
     }
 
     /**
-     * 通过标题查找元素
+     * 通过Role查找元素
      */
-    protected Locator byTitle(String title) {
+    public Locator byRole(com.microsoft.playwright.options.AriaRole role) {
+        ensurePageValid();
+        return page.getByRole(role);
+    }
+
+    /**
+     * 通过Title查找元素
+     */
+    public Locator byTitle(String title) {
         ensurePageValid();
         return page.getByTitle(title);
     }
 
     /**
-     * 通过Role查找元素
+     * 通过TestId查找元素
      */
-    protected Locator byRole(AriaRole role) {
+    public Locator byTestId(String testId) {
         ensurePageValid();
-        return page.getByRole(role);
+        return page.getByTestId(testId);
     }
 
     /**
@@ -388,6 +396,34 @@ public abstract class BasePage {
     }
 
     /**
+     * 获取元素内部HTML
+     */
+    public String innerHTML(String selector) {
+        try {
+            String html = locator(selector).innerHTML();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Getting innerHTML from element {}: {}", selector, html);
+            return html;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get innerHTML from element: {}", selector, e);
+            throw new ElementException("Failed to get innerHTML from element: " + selector, e);
+        }
+    }
+
+    /**
+     * 获取元素文本内容
+     */
+    public String textContent(String selector) {
+        try {
+            String text = locator(selector).textContent();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Getting textContent from element {}: {}", selector, text);
+            return text;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to get textContent from element: {}", selector, e);
+            throw new ElementException("Failed to get textContent from element: " + selector, e);
+        }
+    }
+
+    /**
      * 获取输入框的值
      */
     public String getValue(String selector) {
@@ -464,6 +500,32 @@ public abstract class BasePage {
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to uncheck element: {}", selector, e);
             throw new ElementException("Failed to uncheck element: " + selector, e);
+        }
+    }
+
+    /**
+     * 点击元素（轻触）
+     */
+    public void tap(String selector) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Tapping element: {}", selector);
+            locator(selector).tap();
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to tap element: {}", selector, e);
+            throw new ElementException("Failed to tap element: " + selector, e);
+        }
+    }
+
+    /**
+     * 聚焦元素
+     */
+    public void focus(String selector) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Focusing element: {}", selector);
+            locator(selector).focus();
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to focus element: {}", selector, e);
+            throw new ElementException("Failed to focus element: " + selector, e);
         }
     }
 
@@ -590,6 +652,39 @@ public abstract class BasePage {
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is visible: {}", selector, e);
             throw new RuntimeException("Failed to check if element is visible: " + selector, e);
+        }
+    }
+
+    /**
+     * 检查元素是否隐藏
+     *
+     * @param selector 元素选择器
+     * @return 元素隐藏返回true，否则返回false
+     */
+    public boolean isHidden(String selector) {
+        try {
+            boolean hidden = locator(selector).isHidden();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Element {} is hidden: {}", selector, hidden);
+            return hidden;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if element is hidden: {}", selector, e);
+            throw new RuntimeException("Failed to check if element is hidden: " + selector, e);
+        }
+    }
+
+    /**
+     * 检查页面是否关闭
+     *
+     * @return 页面关闭返回true，否则返回false
+     */
+    public boolean isClosed() {
+        try {
+            boolean closed = page.isClosed();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Page is closed: {}", closed);
+            return closed;
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to check if page is closed", e);
+            throw new RuntimeException("Failed to check if page is closed", e);
         }
     }
 
@@ -769,6 +864,32 @@ public abstract class BasePage {
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to navigate to URL: {}", url, e);
             throw new RuntimeException("Failed to navigate to URL: " + url, e);
+        }
+    }
+
+    /**
+     * 将页面带到前台
+     */
+    public void bringToFront() {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Bringing page to front");
+            page.bringToFront();
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to bring page to front", e);
+            throw new RuntimeException("Failed to bring page to front", e);
+        }
+    }
+
+    /**
+     * 设置页面HTML内容
+     */
+    public void setContent(String html) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Setting page content");
+            page.setContent(html);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to set page content", e);
+            throw new RuntimeException("Failed to set page content", e);
         }
     }
 
@@ -1503,6 +1624,36 @@ public abstract class BasePage {
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to close page", e);
             throw new RuntimeException("Failed to close page", e);
+        }
+    }
+
+    /**
+     * 设置视口大小
+     */
+    public void setViewportSize(int width, int height) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Setting viewport size to {}x{}", width, height);
+            page.setViewportSize(width, height);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to set viewport size: {}x{}", width, height, e);
+            throw new RuntimeException("Failed to set viewport size: " + width + "x" + height, e);
+        }
+    }
+
+    /**
+     * 设置输入文件
+     */
+    public void setInputFiles(String selector, String... filePaths) {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Setting input files for element: {}", selector);
+            java.nio.file.Path[] paths = new java.nio.file.Path[filePaths.length];
+            for (int i = 0; i < filePaths.length; i++) {
+                paths[i] = java.nio.file.Paths.get(filePaths[i]);
+            }
+            locator(selector).setInputFiles(paths);
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to set input files for element: {}", selector, e);
+            throw new RuntimeException("Failed to set input files for element: " + selector, e);
         }
     }
 
