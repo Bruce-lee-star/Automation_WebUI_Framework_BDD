@@ -1278,6 +1278,22 @@ public class PlaywrightManager {
         String colorScheme = getColorScheme();
         contextOptions.setColorScheme(ColorScheme.valueOf(colorScheme.toUpperCase().replace("-", "_")));
 
+        // 设置 Viewport（如果未启用窗口最大化，则使用配置的 viewport）
+        boolean maximizeWindow = isWindowMaximize();
+        if (!maximizeWindow) {
+            int viewportWidth = getViewportWidth();
+            int viewportHeight = getViewportHeight();
+            contextOptions.setViewportSize(viewportWidth, viewportHeight);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Setting viewport size from config: {}x{}", viewportWidth, viewportHeight);
+        } else {
+            // 窗口最大化模式：使用逻辑屏幕尺寸作为 viewport
+            Dimension screenSize = getAvailableScreenSize();
+            int logicalWidth = (int) screenSize.getWidth();
+            int logicalHeight = (int) screenSize.getHeight();
+            contextOptions.setViewportSize(logicalWidth, logicalHeight);
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Window maximize enabled, setting viewport to screen size: {}x{}", logicalWidth, logicalHeight);
+        }
+
         // 设置录屏
         configureVideoRecording(contextOptions);
     }

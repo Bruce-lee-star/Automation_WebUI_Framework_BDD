@@ -71,19 +71,6 @@ public class LogonGlue {
         logger.info("========================================");
         count = Integer.valueOf(RandomStringUtil.randomNumeric(3));
         System.out.println("count:" + count);
-        // 【在Glue方法中设置自定义配置】
-        // 框架不会立即重置customContextOptionsFlag,允许多次设置
-        PlaywrightManager.setCustomColorScheme(ColorScheme.DARK);
-        PlaywrightManager.setCustomUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.0.0 Safari/537.36");
-        if(count % 2 == 0){
-            PlaywrightManager.setCustomViewportSize(1280, 720);
-        }else{
-            PlaywrightManager.setCustomViewportSize(600, 840);
-        }
-
-        // 【准备session】在业务层直接调用
-        String sessionKey = env + "_" + username;
-        SessionManager.prepareSession(sessionKey);
 
         // 执行登录
         loginSteps.logonDBBEnvironmentAsUser(env, username);

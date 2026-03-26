@@ -1,7 +1,8 @@
 package com.hsbc.cmb.hk.dbb.automation.tests.steps;
 
-import com.hsbc.cmb.hk.dbb.automation.framework.web.session.SessionManager;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.accessibility.AccessibilityScanner;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.factory.PageObjectFactory;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.session.SessionManager;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.HomePage;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.LoginPage;
 import com.hsbc.cmb.hk.dbb.automation.tests.utils.BDDUtils;
@@ -68,8 +69,11 @@ public class LoginSteps {
         logger.info("LoginSteps - SessionKey: {}", sessionKey);
         logger.info("========================================");
 
+        // 【准备session】在业务层直接调用
+        String sessionKey = env + "_" + username;
+        SessionManager.prepareSession(sessionKey);
+
         // 【核心】让框架自动处理 session
-        // 注意：prepareSession()已在LogonGlue中提前调用
         // 框架已经：
         // 1. 检查 session 文件是否存在且未过期
         // 2. 如果存在，读取 homeUrl 并设置 storageStatePath
@@ -121,8 +125,10 @@ public class LoginSteps {
 
         loginPage.navigateTo(currentUrl);
         loginPage.userNameIpt.type(username);
+        AccessibilityScanner.checkAndCollect("prelogon - LoginPage username input");
         loginPage.nextBtn.click();
         loginPage.paswordIpt.type(BDDUtils.getCurrentPassword());
+        AccessibilityScanner.checkAndCollect("prelogon - LoginPage password input");
         loginPage.physicalDeviceLabel.click();
         loginPage.securityCodeIpt.type(BDDUtils.getSecurityCode(BDDUtils.getCurrentSecurityUrl()));
         loginPage.loginBtn.click();
@@ -133,6 +139,7 @@ public class LoginSteps {
             switchProfile(targetProfile);
         }
         homePage.quickLink.waitForVisible(30);
+        AccessibilityScanner.checkAndCollect("logon - home Page");
 
         // 【核心】让框架自动保存 session
         // 业务层只传递 session key 和 homeUrl
