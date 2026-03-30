@@ -54,7 +54,7 @@ public class FrameworkCore {
                 return;
             }
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "🚀 Initializing FrameworkCore...");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Initializing FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework initialization process");
 
             // 初始化框架状态
@@ -86,7 +86,7 @@ public class FrameworkCore {
                 return;
             }
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "🚀 Initializing FrameworkCore with custom listener packages...");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Initializing FrameworkCore with custom listener packages...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework initialization with custom packages");
 
             // 初始化框架状态
@@ -117,7 +117,7 @@ public class FrameworkCore {
                 return;
             }
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "▶️ Starting FrameworkCore...");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Starting FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework core");
 
             // 标记框架为运行状态
@@ -140,7 +140,7 @@ public class FrameworkCore {
                 return;
             }
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "⏹️ Stopping FrameworkCore...");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Stopping FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Stopping framework core");
 
             // 标记框架为停止状态
@@ -163,7 +163,7 @@ public class FrameworkCore {
                 return;
             }
 
-            LoggingConfigUtil.logInfoIfVerbose(logger, "🧹 Cleaning up FrameworkCore...");
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Cleaning up FrameworkCore...");
             LoggingConfigUtil.logDebugIfVerbose(logger, "Starting framework cleanup");
 
             // 停止框架
@@ -191,7 +191,7 @@ public class FrameworkCore {
     // 测试开始前的准备
     public void beforeTest() {
         try {
-            LoggingConfigUtil.logDebugIfVerbose(logger, "🔍 Preparing for test execution...");
+            LoggingConfigUtil.logDebugIfVerbose(logger, "Preparing for test execution...");
 
             // 确保框架已初始化
             if (!frameworkState.isInitialized()) {
@@ -218,7 +218,7 @@ public class FrameworkCore {
     // 测试完成后的清理
     public void afterTest() {
         try {
-            LoggingConfigUtil.logDebugIfVerbose(logger, "🧹 Cleaning up after test execution...");
+            LoggingConfigUtil.logDebugIfVerbose(logger, "Cleaning up after test execution...");
 
             // 清理Playwright资源
             PlaywrightManager.cleanupForScenario();

@@ -37,7 +37,7 @@ public abstract class SerenityBasePage extends BasePage {
         super();
         try {
             LoggingConfigUtil.logInfoIfVerbose(
-                    logger, "🚀 Initializing Serenity Base Page");
+                    logger, "Initializing Serenity Base Page");
 
             // 记录页面初始化到Serenity报告
             addSerenityTestData("pageInitialized", true);
@@ -93,7 +93,7 @@ public abstract class SerenityBasePage extends BasePage {
             serenityTestData.put(key, value);
 
             LoggingConfigUtil.logDebugIfVerbose(
-                    logger, "📝 Added Serenity test data: {} = {}", key, value);
+                    logger, "Added Serenity test data: {} = {}", key, value);
         } catch (Exception e) {
             logger.error("Failed to add Serenity test data: {} = {}", key, value, e);
             throw new ConfigurationException("Failed to add Serenity test data: " + key + " = " + value, e);

@@ -825,7 +825,7 @@ public class PlaywrightManager {
             throw new IllegalStateException("Playwright environment not initialized. Call FrameworkCore.initialize() first.");
         }
 
-        logger.info("📱 [getBrowser] Called with configId: {}", configId);
+        logger.info("[getBrowser] Called with configId: {}", configId);
 
         Browser browser = browserInstances.get(configId);
         if (browser == null || !browser.isConnected()) {
@@ -1170,10 +1170,15 @@ public class PlaywrightManager {
         LoggingConfigUtil.logInfoIfVerbose(logger, "Creating new Page...");
         Page page = context.newPage();
 
+        // 【调试】追踪页面导航事件
+        page.onPageError(error -> {
+            logger.error("🔍 [PAGE ERROR] Page error: {}", error);
+        });
+        
         // 页面稳定化：防止页面加载过程中出现缩放行为
         stabilizePage(page);
 
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Page created successfully");
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Page created successfully with initial URL: {}", page.url());
         return page;
     }
 

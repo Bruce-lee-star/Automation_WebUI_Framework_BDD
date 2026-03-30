@@ -69,8 +69,6 @@ public class LogonGlue {
         logger.info("  Effective browser: {}", effectiveBrowser);
         logger.info("  Default browser: {}", defaultBrowser);
         logger.info("========================================");
-        count = Integer.valueOf(RandomStringUtil.randomNumeric(3));
-        System.out.println("count:" + count);
 
         // 执行登录
         loginSteps.logonDBBEnvironmentAsUser(env, username);

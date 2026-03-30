@@ -28,35 +28,42 @@ public class AxeCoreListener implements StepListener {
     private static final Logger logger = LoggerFactory.getLogger(AxeCoreListener.class);
 
     private static final ThreadLocal<Boolean> axeEnabled = ThreadLocal.withInitial(() -> false);
+    private static final ThreadLocal<Boolean> reportGenerated = ThreadLocal.withInitial(() -> false);
 
     /**
      * Initialize before test suite
      */
     public static void initializeIfNeeded() {
         if (!AxeCoreScanner.isInitialized()) {
-            AxeCoreScanner.AxeScanConfig config = new AxeCoreScanner.AxeScanConfig();
+            try {
+                AxeCoreScanner.AxeScanConfig config = new AxeCoreScanner.AxeScanConfig();
 
-            // Read configuration using FrameworkConfigManager
-            boolean enabled = FrameworkConfigManager.getBoolean(FrameworkConfig.AXE_SCAN_ENABLED);
-            String projectName = PlaywrightManager.getProjectName();
-            String tags = FrameworkConfigManager.getString(FrameworkConfig.AXE_SCAN_TAGS);
-            String outputDir = FrameworkConfigManager.getString(FrameworkConfig.AXE_SCAN_OUTPUT_DIR);
+                // Read configuration using FrameworkConfigManager
+                boolean enabled = FrameworkConfigManager.getBoolean(FrameworkConfig.AXE_SCAN_ENABLED);
+                String projectName = PlaywrightManager.getProjectName();
+                String tags = FrameworkConfigManager.getString(FrameworkConfig.AXE_SCAN_TAGS);
+                String outputDir = FrameworkConfigManager.getString(FrameworkConfig.AXE_SCAN_OUTPUT_DIR);
 
-            axeEnabled.set(enabled);
+                axeEnabled.set(enabled);
+                reportGenerated.set(false);  // Reset report flag
 
-            if (axeEnabled.get()) {
-                config.setProjectName(projectName);
-                config.setReportOutputDir(outputDir);
+                if (axeEnabled.get()) {
+                    config.setProjectName(projectName);
+                    config.setReportOutputDir(outputDir);
 
-                // Parse tags
-                if (tags != null && !tags.isEmpty()) {
-                    for (String tag : tags.split(",")) {
-                        config.getTags().add(tag.trim());
+                    // Parse tags
+                    if (tags != null && !tags.isEmpty()) {
+                        for (String tag : tags.split(",")) {
+                            config.getTags().add(tag.trim());
+                        }
                     }
-                }
 
-                AxeCoreScanner.initialize(config);
-                logger.info("AxeCoreListener initialized with project: {}, tags: {}", projectName, tags);
+                    AxeCoreScanner.initialize(config);
+                    logger.info("AxeCoreListener initialized with project: {}, tags: {}", projectName, tags);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to initialize AxeCoreListener: {}", e.getMessage(), e);
+                axeEnabled.set(false);
             }
         }
     }
@@ -73,12 +80,7 @@ public class AxeCoreListener implements StepListener {
         }
 
         try {
-            var page = PlaywrightManager.getPage();
-            if (page != null && !page.isClosed()) {
-                return AxeCoreScanner.scanPage(pageName, page);
-            } else {
-                logger.warn("Page is not available for axe-core scan");
-            }
+            return AxeCoreScanner.scanPage(pageName);
         } catch (Exception e) {
             logger.error("Error during axe-core scan: {}", e.getMessage());
         }
@@ -97,12 +99,7 @@ public class AxeCoreListener implements StepListener {
         }
 
         try {
-            var page = PlaywrightManager.getPage();
-            if (page != null && !page.isClosed()) {
-                return AxeCoreScanner.scanPage(pageName, page, contextSelector);
-            } else {
-                logger.warn("Page is not available for axe-core scan");
-            }
+            return AxeCoreScanner.scanPage(pageName, contextSelector);
         } catch (Exception e) {
             logger.error("Error during axe-core scan: {}", e.getMessage());
         }
@@ -110,12 +107,40 @@ public class AxeCoreListener implements StepListener {
     }
 
     /**
-     * Generate final report
+     * Generate final report (ensure only called once)
      */
     public static void generateFinalReport() {
+        // Prevent duplicate report generation
+        if (reportGenerated.get()) {
+            logger.debug("Report already generated, skipping");
+            return;
+        }
+        
         if (AxeCoreScanner.isInitialized()) {
-            AxeCoreScanner.generateReport();
-            logger.info("Axe-core accessibility report generated");
+            try {
+                AxeCoreScanner.generateReport();
+                logger.info("Axe-core accessibility report generated");
+                reportGenerated.set(true);
+            } catch (Exception e) {
+                logger.error("Failed to generate axe-core report: {}", e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Cleanup resources (ThreadLocal and AxeCoreScanner)
+     */
+    private static void cleanupResources() {
+        try {
+            if (AxeCoreScanner.isInitialized()) {
+                AxeCoreScanner.cleanup();
+            }
+        } catch (Exception e) {
+            logger.error("Error during AxeCoreScanner cleanup: {}", e.getMessage(), e);
+        } finally {
+            // Always clean up ThreadLocals to prevent memory leaks
+            axeEnabled.remove();
+            reportGenerated.remove();
         }
     }
 
@@ -142,9 +167,9 @@ public class AxeCoreListener implements StepListener {
     @Override
     public void testSuiteFinished() {
         // Generate single aggregated report at test suite finish
-        if (axeEnabled.get() && AxeCoreScanner.isInitialized()) {
+        if (axeEnabled.get()) {
             generateFinalReport();
-            AxeCoreScanner.cleanup();
+            cleanupResources();
         }
     }
 
@@ -282,9 +307,12 @@ public class AxeCoreListener implements StepListener {
 
     @Override
     public void testRunFinished() {
-        if (axeEnabled.get() && AxeCoreScanner.isInitialized()) {
+        // Fallback: ensure cleanup even if testSuiteFinished wasn't called
+        // This is a safety net for edge cases
+        if (axeEnabled.get()) {
+            logger.debug("testRunFinished called - performing final cleanup");
             generateFinalReport();
-            AxeCoreScanner.cleanup();
+            cleanupResources();
         }
     }
 

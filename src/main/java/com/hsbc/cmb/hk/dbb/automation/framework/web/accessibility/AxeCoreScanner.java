@@ -164,7 +164,34 @@ public class AxeCoreScanner {
     }
 
     /**
-     * Scan a page for accessibility issues using axe-core
+     * Scan current page for accessibility issues using axe-core
+     * Automatically retrieves the current Page from PlaywrightManager
+     * 
+     * @param pageName Descriptive name for the page being scanned
+     * @return AxeScanResult containing the scan results
+     */
+    public static AxeScanResult scanPage(String pageName) {
+        return scanPage(pageName, PlaywrightManager.getPage());
+    }
+    
+    /**
+     * Scan current page with custom selector context
+     * Automatically retrieves the current Page from PlaywrightManager
+     * 
+     * @param pageName Descriptive name for the page being scanned
+     * @param contextSelector CSS selector to limit the scan scope
+     * @return AxeScanResult containing the scan results
+     */
+    public static AxeScanResult scanPage(String pageName, String contextSelector) {
+        return scanPage(pageName, PlaywrightManager.getPage(), contextSelector);
+    }
+
+    /**
+     * Scan a page for accessibility issues using axe-core (with explicit Page)
+     * 
+     * @param pageName Descriptive name for the page being scanned
+     * @param page Playwright Page object to scan
+     * @return AxeScanResult containing the scan results
      */
     public static AxeScanResult scanPage(String pageName, Page page) {
         if (!isInitialized()) {
@@ -176,6 +203,8 @@ public class AxeCoreScanner {
 
         try {
             logger.info("Starting axe-core scan for: {}", pageName);
+            logger.debug("Page URL before scan: {}", page.url());
+            logger.debug("Page count in context before scan: {}", page.context().pages().size());
 
             // Build axe scanner with configuration
             AxeBuilder axeBuilder = new AxeBuilder(page);
@@ -183,20 +212,26 @@ public class AxeCoreScanner {
             // Set tags (WCAG levels)
             if (scanConfig.getTags() != null && !scanConfig.getTags().isEmpty()) {
                 axeBuilder.withTags(scanConfig.getTags());
+                logger.debug("Axe-core tags: {}", scanConfig.getTags());
             }
 
             // Set specific rules to run
             if (scanConfig.getRules() != null && !scanConfig.getRules().isEmpty()) {
                 axeBuilder.withRules(scanConfig.getRules());
+                logger.debug("Axe-core rules: {}", scanConfig.getRules());
             }
 
             // Exclude specific rules
             if (scanConfig.getExcludeRules() != null && !scanConfig.getExcludeRules().isEmpty()) {
                 axeBuilder.disableRules(scanConfig.getExcludeRules());
+                logger.debug("Axe-core excluded rules: {}", scanConfig.getExcludeRules());
             }
 
             // Run axe-core analysis
+            logger.debug("Running axe-core analyze()...");
             AxeResults axeResults = axeBuilder.analyze();
+            logger.debug("Axe-core analyze() completed");
+            logger.debug("Page count in context after scan: {}", page.context().pages().size());
 
             // Process results
             result.setViolations(axeResults.getViolations());
@@ -212,7 +247,6 @@ public class AxeCoreScanner {
 
             logger.info("Axe-core scan completed for {}: {} violations, {} incomplete, {} passes",
                 pageName, result.getViolationCount(), result.getIncompleteCount(), result.getPassCount());
-
         } catch (Exception e) {
             logger.error("Error during axe-core scan for {}: {}", pageName, e.getMessage(), e);
         }
@@ -221,7 +255,12 @@ public class AxeCoreScanner {
     }
 
     /**
-     * Scan a page with custom selector context
+     * Scan a page with custom selector context (with explicit Page)
+     * 
+     * @param pageName Descriptive name for the page being scanned
+     * @param page Playwright Page object to scan
+     * @param contextSelector CSS selector to limit the scan scope
+     * @return AxeScanResult containing the scan results
      */
     public static AxeScanResult scanPage(String pageName, Page page, String contextSelector) {
         if (!isInitialized()) {
@@ -233,27 +272,36 @@ public class AxeCoreScanner {
 
         try {
             logger.info("Starting axe-core scan for: {} (context: {})", pageName, contextSelector);
+            logger.debug("Page URL before scan: {}", page.url());
+            logger.debug("Page count in context before scan: {}", page.context().pages().size());
 
             AxeBuilder axeBuilder = new AxeBuilder(page);
 
             if (scanConfig.getTags() != null && !scanConfig.getTags().isEmpty()) {
                 axeBuilder.withTags(scanConfig.getTags());
+                logger.debug("Axe-core tags: {}", scanConfig.getTags());
             }
 
             if (scanConfig.getRules() != null && !scanConfig.getRules().isEmpty()) {
                 axeBuilder.withRules(scanConfig.getRules());
+                logger.debug("Axe-core rules: {}", scanConfig.getRules());
             }
 
             if (scanConfig.getExcludeRules() != null && !scanConfig.getExcludeRules().isEmpty()) {
                 axeBuilder.disableRules(scanConfig.getExcludeRules());
+                logger.debug("Axe-core excluded rules: {}", scanConfig.getExcludeRules());
             }
 
             // Include specific context
             if (contextSelector != null && !contextSelector.isEmpty()) {
                 axeBuilder.include(contextSelector);
+                logger.debug("Axe-core context selector: {}", contextSelector);
             }
 
+            logger.debug("Running axe-core analyze()...");
             AxeResults axeResults = axeBuilder.analyze();
+            logger.debug("Axe-core analyze() completed");
+            logger.debug("Page count in context after scan: {}", page.context().pages().size());
 
             result.setViolations(axeResults.getViolations());
             result.setIncomplete(axeResults.getIncomplete());

@@ -126,20 +126,15 @@ public class LoginSteps {
         loginPage.navigateTo(currentUrl);
         
         // Axe-core accessibility scan on login page
-        AxeCoreScanner.scanPage("Login Page - Initial", loginPage.getPage());
+        AxeCoreScanner.scanPage("Login Page - Initial");
         
         loginPage.userNameIpt.type(username);
-//        AccessibilityScanner.checkAndCollect("prelogon - LoginPage username input");
-        
-        // Axe-core scan after username input
-        AxeCoreScanner.scanPage("Login Page - After Username", loginPage.getPage());
-        
+
         loginPage.nextBtn.click();
         loginPage.paswordIpt.type(BDDUtils.getCurrentPassword());
-//        AccessibilityScanner.checkAndCollect("prelogon - LoginPage password input");
-        
+
         // Axe-core scan after password input
-        AxeCoreScanner.scanPage("Login Page - After Password", loginPage.getPage());
+        AxeCoreScanner.scanPage("Login Page - After Password");
         
         loginPage.physicalDeviceLabel.click();
         loginPage.securityCodeIpt.type(BDDUtils.getSecurityCode(BDDUtils.getCurrentSecurityUrl()));
@@ -154,7 +149,7 @@ public class LoginSteps {
 //        AccessibilityScanner.checkAndCollect("logon - home Page");
         
         // Axe-core accessibility scan on home page
-        AxeCoreScanner.scanPage("Home Page - After Login", loginPage.getPage());
+        AxeCoreScanner.scanPage("Home Page - After Login");
         logger.info("Axe-core scans completed for login flow");
 
         // 【核心】让框架自动保存 session
