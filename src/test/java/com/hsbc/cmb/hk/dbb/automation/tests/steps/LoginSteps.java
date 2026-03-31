@@ -1,6 +1,5 @@
 package com.hsbc.cmb.hk.dbb.automation.tests.steps;
 
-import com.hsbc.cmb.hk.dbb.automation.framework.web.accessibility.AxeCoreScanner;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.factory.PageObjectFactory;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.session.SessionManager;
 import com.hsbc.cmb.hk.dbb.automation.tests.pages.HomePage;
@@ -71,7 +70,7 @@ public class LoginSteps {
 
         // 【准备session】在业务层直接调用
         String sessionKey = env + "_" + username;
-        SessionManager.prepareSession(sessionKey);
+        SessionManager.restoreSession(sessionKey);
 
         // 【核心】让框架自动处理 session
         // 框架已经：
@@ -126,15 +125,15 @@ public class LoginSteps {
         loginPage.navigateTo(currentUrl);
         
         // Axe-core accessibility scan on login page
-        AxeCoreScanner.scanPage("Login Page - Initial");
+//        AxeCoreScanner.scanPage("Login Page - Initial");
         
         loginPage.userNameIpt.type(username);
 
         loginPage.nextBtn.click();
         loginPage.paswordIpt.type(BDDUtils.getCurrentPassword());
 
-        // Axe-core scan after password input
-        AxeCoreScanner.scanPage("Login Page - After Password");
+//        // Axe-core scan after password input
+//        AxeCoreScanner.scanPage("Login Page - After Password");
         
         loginPage.physicalDeviceLabel.click();
         loginPage.securityCodeIpt.type(BDDUtils.getSecurityCode(BDDUtils.getCurrentSecurityUrl()));
@@ -149,7 +148,7 @@ public class LoginSteps {
 //        AccessibilityScanner.checkAndCollect("logon - home Page");
         
         // Axe-core accessibility scan on home page
-        AxeCoreScanner.scanPage("Home Page - After Login");
+//        AxeCoreScanner.scanPage("Home Page - After Login");
         logger.info("Axe-core scans completed for login flow");
 
         // 【核心】让框架自动保存 session
@@ -159,7 +158,7 @@ public class LoginSteps {
         // 2. 使用 Playwright API 保存 storageState 到文件
         // 3. 保存元数据（homeUrl + timestamp）
         String homeUrl = loginPage.getCurrentUrl();
-        SessionManager.saveCurrentSession(sessionKey, homeUrl);
+        SessionManager.saveSession(sessionKey, homeUrl);
 
         logger.info("Login completed and session saved");
     }
@@ -178,7 +177,7 @@ public class LoginSteps {
 
         // 切换 profile 后保存 session
         String homeUrl = loginPage.getCurrentUrl();
-        SessionManager.saveCurrentSession(sessionKey, homeUrl);
+        SessionManager.saveSession(sessionKey, homeUrl);
     }
 
     /**

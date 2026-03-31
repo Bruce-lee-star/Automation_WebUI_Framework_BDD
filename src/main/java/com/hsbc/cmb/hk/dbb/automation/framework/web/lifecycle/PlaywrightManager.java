@@ -1924,7 +1924,7 @@ public class PlaywrightManager {
                 page.evaluate("() => { if (window.performance && window.performance.clearResourceTimings) window.performance.clearResourceTimings(); }");
 
                 // 2. 可选：导航到空白页（如果需要更彻底的清理）
-                // page.navigate("about:blank");
+                 page.navigate("about:blank");
 
                 LoggingConfigUtil.logDebugIfVerbose(logger, "Page state cleaned up");
             } catch (Exception e) {

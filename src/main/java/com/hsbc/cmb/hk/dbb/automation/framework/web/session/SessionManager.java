@@ -1,7 +1,6 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.session;
 
 import com.microsoft.playwright.BrowserContext;
-import com.microsoft.playwright.Page;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle.PlaywrightManager;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
 import org.slf4j.Logger;
@@ -41,7 +40,7 @@ public class SessionManager {
      * @param sessionKey Session 标识（如 "O63_SIT1_WP7UAT2_2"）
      * @return true 表示 session 文件存在且未过期，false 表示需要登录
      */
-    public static boolean hasSession(String sessionKey) {
+    private static boolean hasSession(String sessionKey) {
         Path sessionPath = getSessionPath(sessionKey);
         Path metaPath = getMetaPath(sessionKey);
         
@@ -89,7 +88,7 @@ public class SessionManager {
      * @param sessionKey Session 标识（如 "O63_SIT1_WP7UAT2_2"）
      * @return true 表示 session 已准备好，false 表示需要登录
      */
-    public static boolean prepareSession(String sessionKey) {
+    public static boolean restoreSession(String sessionKey) {
         if (hasSession(sessionKey)) {
             // Session 有效，读取 homeUrl
             String homeUrl = loadHomeUrl(sessionKey);
@@ -130,7 +129,7 @@ public class SessionManager {
      * @param sessionKey Session 标识（如 "O63_SIT1_WP7UAT2_2"）
      * @param homeUrl 登录成功后的首页 URL
      */
-    public static void saveCurrentSession(String sessionKey, String homeUrl) {
+    public static void saveSession(String sessionKey, String homeUrl) {
         try {
             Path sessionPath = getSessionPath(sessionKey);
             
