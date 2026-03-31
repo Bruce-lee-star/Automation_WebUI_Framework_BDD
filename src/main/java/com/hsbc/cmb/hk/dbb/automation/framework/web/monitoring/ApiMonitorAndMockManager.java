@@ -22,27 +22,9 @@ import java.util.stream.Collectors;
 /**
  * API Monitor and Mock Manager - 监测API响应、mock response和修改请求信息
  *
- * 功能：
- * 1. 监测API请求和响应
- * 2. Mock API响应
- * 3. 修改请求信息（headers、query parameters、request body、method等）
- * 4. 记录API调用历史
- * 5. 动态响应生成
- * 6. 针对特定API模拟弱网
+ * 功能：监测API请求和响应、Mock API响应、修改请求信息、记录API调用历史等
  *
- * 【推荐使用方式】Builder模式 - 功能强大、链式调用、清晰易读：
- *
- * 【推荐】Builder模式 - Mock响应：
- *   ApiMonitorAndMockManager.mock(context)
- *       .forUrl(".*api/users.*")
- *       .withStatus(200)
- *       .withResponse("{\"status\":\"success\"}")
- *       .build();
- *
- * 说明：
- * - 使用 forUrl() 可指定 Host URL（可选，用于精确匹配特定域名）
- * - 使用 forEndpoint() 可指定 API endpoint（必需）
- * - 拦截器会自动匹配，无需在代码中重复判断
+ * 详细使用说明请参考：src/test/resources/API_Mock_User_Guide.md
  */
 public class ApiMonitorAndMockManager {
     
@@ -410,6 +392,63 @@ public class ApiMonitorAndMockManager {
         logger.info(" Mock API with timeout configured successfully!");
     }
 
+    // ==================== 高级API ====================
+
+    /**
+     * 【高级】动态响应生成 - 根据请求内容生成响应
+     * 适用于需要根据请求参数返回不同响应的场景
+     *
+     * @param page Playwright Page对象
+     * @param urlPattern URL匹配模式（支持普通URL或正则）
+     * @param generator 响应生成器，接收请求和上下文，返回响应字符串
+     *
+     * 示例：
+     * mockDynamic(page, "/api/users", (request, ctx) -> {
+     *     String method = request.method();
+     *     if ("POST".equals(method)) {
+     *         return "{\"status\":\"created\"}";
+     *     }
+     *     return "{\"status\":\"success\"}";
+     * });
+     */
+    public static void mockDynamic(Page page, String urlPattern, ResponseGenerator generator) {
+        String pattern = toGlobPattern(urlPattern);
+        logger.info("========== Mocking Dynamic API: {} ==========", pattern);
+
+        MockRule rule = new MockRule("mock-dynamic-" + pattern, pattern)
+            .responseGenerator(generator);
+        registerMockRule(rule);
+        applyMocks(page);
+        recordMockConfiguration();
+
+        logger.info(" Mock Dynamic API configured successfully!");
+    }
+
+    /**
+     * 【高级】动态响应生成 - 根据请求内容生成响应
+     *
+     * @param context Playwright BrowserContext对象
+     * @param urlPattern URL匹配模式（支持普通URL或正则）
+     * @param generator 响应生成器
+     *
+     * 示例：
+     * mockDynamic(context, "/api/users", (request, ctx) -> {
+     *     return "{\"dynamic\": \"response\"}";
+     * });
+     */
+    public static void mockDynamic(BrowserContext context, String urlPattern, ResponseGenerator generator) {
+        String pattern = toGlobPattern(urlPattern);
+        logger.info("========== Mocking Dynamic API: {} ==========", pattern);
+
+        MockRule rule = new MockRule("mock-dynamic-" + pattern, pattern)
+            .responseGenerator(generator);
+        registerMockRule(rule);
+        applyMocks(context);
+        recordMockConfiguration();
+
+        logger.info(" Mock Dynamic API configured successfully!");
+    }
+
     // ==================== URL工具方法 ====================
 
     /**
@@ -451,36 +490,39 @@ public class ApiMonitorAndMockManager {
         logger.info("ApiMonitorAndMockManager initialized successfully");
     }
     
+    // ==================== 内部方法（不对外暴露） ====================
+
     /**
-     * 注册Mock规则
+     * 【内部方法】注册Mock规则
+     * 用户不需要直接调用，使用 mock() 或 mockDirectResponse() 等简化方法
      */
-    public static void registerMockRule(MockRule rule) {
+    private static void registerMockRule(MockRule rule) {
         mockRules.put(rule.getName(), rule);
         logger.info("Registered mock rule: {} for URL pattern: {}", rule.getName(), rule.getUrlPattern());
     }
     
     /**
-     * 快速注册简单的Mock规则
+     * 【内部方法】快速注册简单的Mock规则
      */
-    public static void registerMock(String name, String urlPattern, String mockDataJson) {
+    private static void registerMock(String name, String urlPattern, String mockDataJson) {
         MockRule rule = new MockRule(name, urlPattern)
             .mockDataJson(mockDataJson);
         registerMockRule(rule);
     }
     
     /**
-     * 快速注册从文件读取的Mock规则
+     * 【内部方法】快速注册从文件读取的Mock规则
      */
-    public static void registerMockFromFile(String name, String urlPattern, String jsonFilePath) {
+    private static void registerMockFromFile(String name, String urlPattern, String jsonFilePath) {
         MockRule rule = new MockRule(name, urlPattern)
             .mockDataPath(jsonFilePath);
         registerMockRule(rule);
     }
     
     /**
-     * 启用指定的Mock规则
+     * 【内部方法】启用指定的Mock规则
      */
-    public static void enableMock(String mockName) {
+    private static void enableMock(String mockName) {
         MockRule rule = mockRules.get(mockName);
         if (rule != null) {
             rule.enabled(true);
@@ -491,9 +533,9 @@ public class ApiMonitorAndMockManager {
     }
     
     /**
-     * 禁用指定的Mock规则
+     * 【内部方法】禁用指定的Mock规则
      */
-    public static void disableMock(String mockName) {
+    private static void disableMock(String mockName) {
         MockRule rule = mockRules.get(mockName);
         if (rule != null) {
             rule.enabled(false);
@@ -841,15 +883,35 @@ public class ApiMonitorAndMockManager {
     }
 
     /**
-     * 移除指定的Mock规则
+     * 【内部方法】移除指定的Mock规则
+     * 用户不需要直接调用，使用 stopMock() 或 stopAllMocks()
      */
-    public static void removeMock(String mockName) {
+    private static void removeMock(String mockName) {
         mockRules.remove(mockName);
         logger.info("Removed mock rule: {}", mockName);
     }
     
+    // ==================== 查询API（用于测试验证） ====================
+
     /**
-     * 获取所有Mock规则
+     * 获取已注册的Mock规则数量
+     */
+    public static int getMockRuleCount() {
+        return mockRules.size();
+    }
+
+    /**
+     * 检查是否存在指定URL模式的Mock规则
+     */
+    public static boolean hasMockForUrl(String urlPattern) {
+        String globPattern = toGlobPattern(urlPattern);
+        return mockRules.values().stream()
+                .anyMatch(rule -> rule.getUrlPattern().equals(globPattern));
+    }
+
+    /**
+     * 获取所有Mock规则（用于测试验证）
+     * 注意：此方法主要用于测试目的，正常业务代码不需要使用
      */
     public static Map<String, MockRule> getAllMockRules() {
         return new HashMap<>(mockRules);
@@ -961,25 +1023,21 @@ public class ApiMonitorAndMockManager {
                 .replace("\t", "\\t");
     }
     
-    // ==================== 预定义的常用Mock方法 ====================
+    // ==================== 内部预定义Mock方法（不对外暴露） ====================
 
     /**
-     * Mock一个成功的响应
-     * @param name 规则名称
-     * @param urlPattern URL 匹配模式
-     * @param responseData 完整的响应数据（由调用者提供）
+     * 【内部方法】Mock一个成功的响应
+     * 用户应使用 mockDirectSuccess(page, urlPattern, responseData)
      */
-    public static void mockDirectSuccess(String name, String urlPattern, String responseData) {
+    private static void mockDirectSuccess(String name, String urlPattern, String responseData) {
         registerMock(name, urlPattern, responseData);
     }
 
     /**
-     * Mock一个失败的响应
-     * @param name 规则名称
-     * @param urlPattern URL 匹配模式
-     * @param errorData 完整的错误响应数据（由调用者提供）
+     * 【内部方法】Mock一个失败的响应
+     * 用户应使用 mockDirectError(page, urlPattern, statusCode, errorData)
      */
-    public static void mockDirectError(String name, String urlPattern, String errorData) {
+    private static void mockDirectError(String name, String urlPattern, String errorData) {
         MockRule rule = new MockRule(name, urlPattern)
             .statusCode(500)
             .mockDataJson(errorData);
@@ -987,13 +1045,10 @@ public class ApiMonitorAndMockManager {
     }
 
     /**
-     * Mock超时（长延迟）
-     * @param name 规则名称
-     * @param urlPattern URL 匹配模式
-     * @param timeoutMs 超时时间（毫秒）
-     * @param responseData 完整的响应数据（由调用者提供）
+     * 【内部方法】Mock超时（长延迟）
+     * 用户应使用 mockTimeout(page, urlPattern, timeoutMs, responseData)
      */
-    public static void mockTimeout(String name, String urlPattern, long timeoutMs, String responseData) {
+    private static void mockTimeout(String name, String urlPattern, long timeoutMs, String responseData) {
         MockRule rule = new MockRule(name, urlPattern)
             .delay(timeoutMs)
             .statusCode(408)
@@ -1002,12 +1057,10 @@ public class ApiMonitorAndMockManager {
     }
 
     /**
-     * Mock 404 Not Found
-     * @param name 规则名称
-     * @param urlPattern URL 匹配模式
-     * @param responseData 完整的 404 响应数据（由调用者提供）
+     * 【内部方法】Mock 404 Not Found
+     * 用户应使用 mockDirectError(page, urlPattern, 404, responseData)
      */
-    public static void mockNotFound(String name, String urlPattern, String responseData) {
+    private static void mockNotFound(String name, String urlPattern, String responseData) {
         MockRule rule = new MockRule(name, urlPattern)
             .statusCode(404)
             .mockDataJson(responseData);
@@ -1015,9 +1068,10 @@ public class ApiMonitorAndMockManager {
     }
 
     /**
-     * 动态生成响应（基于请求内容）
+     * 【内部方法】动态生成响应（基于请求内容）
+     * 高级用户可使用 registerDynamicMock()
      */
-    public static void registerDynamicMock(String name, String urlPattern, ResponseGenerator generator) {
+    private static void registerDynamicMock(String name, String urlPattern, ResponseGenerator generator) {
         MockRule rule = new MockRule(name, urlPattern)
             .responseGenerator(generator);
         registerMockRule(rule);
@@ -1058,21 +1112,23 @@ public class ApiMonitorAndMockManager {
         }
 
         /**
-         * 设置要Mock的Host URL（API的域名）
-         * 可选，如果只使用 forEndpoint()，则不需要指定 hostUrl
-         *
-         * @param hostUrl Host URL（如：https://api.example.com）
+         * 设置要Mock的URL模式（支持 glob 模式）
+         * 
+         * @param urlPattern URL 模式
          * @return this构建器实例
          */
-        public MockBuilder forUrl(String hostUrl) {
+        public MockBuilder forUrl(String urlPattern) {
+            // 转换为 glob 模式
+            String globPattern = toGlobPattern(urlPattern);
+            
             if (mockRules.isEmpty()) {
-                // 如果是第一个规则，创建新规则并设置 hostUrl
-                MockRule rule = new MockRule("mock-" + hostUrl, ".*");
-                rule.hostUrl(hostUrl);
+                // 如果是第一个规则，创建新规则
+                MockRule rule = new MockRule("mock-" + urlPattern, globPattern);
                 mockRules.add(rule);
             } else {
-                // 如果已有规则，设置最后一个规则的 hostUrl
-                mockRules.get(mockRules.size() - 1).hostUrl(hostUrl);
+                // 如果已有规则，更新最后一个规则的 urlPattern
+                MockRule lastRule = mockRules.get(mockRules.size() - 1);
+                lastRule.urlPattern(globPattern);
             }
             return this;
         }
