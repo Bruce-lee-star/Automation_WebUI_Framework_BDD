@@ -194,6 +194,16 @@ public class RealApiMonitor {
      * @param expectations API期望映射（URL模式 -> 期望状态码）
      */
     public static void monitorMultiple(BrowserContext context, Map<String, Integer> expectations) {
+        monitorMultiple(context, expectations, 60);
+    }
+
+    /**
+     * 【简化】监控多个API并实时验证 - 批量设置
+     * @param context Playwright BrowserContext对象
+     * @param expectations API期望映射（URL模式 -> 期望状态码）
+     * @param timeoutSeconds 无新API调用后自动停止的秒数
+     */
+    public static void monitorMultiple(BrowserContext context, Map<String, Integer> expectations, int timeoutSeconds) {
         logger.info("========== Starting multiple APIs monitoring with real-time verification ==========");
         logger.info("Monitoring {} APIs with verification", expectations.size());
         // 转换普通URL为正则表达式
@@ -206,7 +216,7 @@ public class RealApiMonitor {
         clearHistory();
         clearApiExpectations();
         expectMultipleApiStatus(convertedExpectations);
-        monitorAllApi(context);
+        monitorAllApi(context, timeoutSeconds);
     }
 
     /**
