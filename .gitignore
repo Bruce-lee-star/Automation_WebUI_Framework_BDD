@@ -36,6 +36,7 @@ serenity-bdd/
 # Playwright
 test-results/
 playwright-report/
+.playwright/
 
 # Temporary files
 *.tmp

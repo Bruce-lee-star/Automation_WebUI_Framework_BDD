@@ -75,17 +75,19 @@ public class PlaywrightListener implements StepListener {
 
     @Override
     public void testStarted(String testName) {
-        currentTestName.set(testName);
+        // 生成唯一名称：原名称 + 线程ID（保证同名 scenario 不合并）
+        String uniqueTestName = testName + "_" + Thread.currentThread().getId();
+        currentTestName.set(uniqueTestName);
         testStartTime.set(System.currentTimeMillis());
         currentTestResult.set(TestResult.PENDING); // 初始化为PENDING，避免默认为SUCCESS导致统计错误
         totalTests.incrementAndGet();
 
         // 测试开始时截图（根据策略决定）
         if (screenshotStrategy == ScreenshotStrategy.BEFORE_AND_AFTER_EACH_STEP) {
-            takeScreenshotAndRegister("TEST_START_" + testName);
+            takeScreenshotAndRegister("TEST_START_" + uniqueTestName);
         }
         recordTestData("testStart", System.currentTimeMillis());
-        LoggingConfigUtil.logInfoIfVerbose(logger, "Test initialized: {}", testName);
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Test initialized: {}", uniqueTestName);
     }
 
     private void testFinishedInternal() {
@@ -391,6 +393,9 @@ public class PlaywrightListener implements StepListener {
         currentTestResult.remove();
         stepStartTime.remove();
         currentStepName.remove();
+        currentCucumberStep.remove();
+        takingScreenshot.remove();
+        currentStepScreenshots.remove();
     }
 
     private String sanitizeName(String name) {
@@ -532,31 +537,29 @@ public class PlaywrightListener implements StepListener {
         LoggingConfigUtil.logDebugIfVerbose(
                 logger, "Test suite finished");
 
-        // 防止多次调用时重复输出清理日志
+        // 使用原子操作确保只清理一次
         synchronized (PlaywrightListener.class) {
-            if (!testSuiteFinishedLogged) {
-                testSuiteFinishedLogged = true;
-                LoggingConfigUtil.logInfoIfVerbose(logger, "Cleaning up all Playwright resources at test suite finish");
-                try {
-                    PlaywrightManager.cleanupForFeature();
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "Cleaned up all resources at test suite finish");
-                } catch (Exception e) {
-                    LoggingConfigUtil.logInfoIfVerbose(logger, "Failed to clean up resources at test suite finish: {}", e.getMessage());
-                }
-            } else {
-                // 已记录过，只执行清理但不输出日志
-                try {
-                    PlaywrightManager.cleanupForFeature();
-                } catch (Exception e) {
-                    logger.debug("Failed to cleanup resources: {}", e.getMessage());
-                }
+            if (testSuiteFinishedLogged) {
+                return; // 已清理过，直接返回
             }
+            testSuiteFinishedLogged = true;
+        }
+        
+        // 清理逻辑
+        LoggingConfigUtil.logInfoIfVerbose(logger, "Cleaning up all Playwright resources at test suite finish");
+        try {
+            PlaywrightManager.cleanupForFeature();
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Cleaned up all resources at test suite finish");
+        } catch (Exception e) {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Failed to clean up resources at test suite finish: {}", e.getMessage());
         }
     }
 
     @Override
     public void testStarted(String testName, String testMethod) {
-        currentTestName.set(testName);
+        // 生成唯一名称：原名称 + 线程ID（保证同名 scenario 不合并）
+        String uniqueTestName = testName + "_" + Thread.currentThread().getId();
+        currentTestName.set(uniqueTestName);
         testStartTime.set(System.currentTimeMillis());
         totalTests.incrementAndGet();
 
@@ -564,15 +567,17 @@ public class PlaywrightListener implements StepListener {
             FrameworkCore.getInstance().beforeTest();
             recordTestData("testStart", System.currentTimeMillis());
             recordTestData("testMethod", testMethod);
-            logger.info("Test initialized: {} (method: {})", testName, testMethod);
+            logger.info("Test initialized: {} (method: {})", uniqueTestName, testMethod);
         } catch (Exception e) {
-            logger.error("Failed to initialize Playwright for test: {}", testName, e);
+            logger.error("Failed to initialize Playwright for test: {}", uniqueTestName, e);
         }
     }
 
     @Override
     public void testStarted(String testName, String testMethod, ZonedDateTime startTime) {
-        currentTestName.set(testName);
+        // 生成唯一名称：原名称 + 线程ID（保证同名 scenario 不合并）
+        String uniqueTestName = testName + "_" + Thread.currentThread().getId();
+        currentTestName.set(uniqueTestName);
         testStartTime.set(startTime != null ? startTime.toInstant().toEpochMilli() : System.currentTimeMillis());
         totalTests.incrementAndGet();
 
@@ -582,41 +587,48 @@ public class PlaywrightListener implements StepListener {
             recordTestData("testStart", start);
             recordTestData("testMethod", testMethod);
             recordTestData("startTimeZoned", startTime);
-            logger.info("Test initialized: {} (method: {}, startTime: {})", testName, testMethod, startTime);
+            logger.info("Test initialized: {} (method: {}, startTime: {})", uniqueTestName, testMethod, startTime);
         } catch (Exception e) {
-            logger.error("Failed to initialize Playwright for test: {}", testName, e);
+            logger.error("Failed to initialize Playwright for test: {}", uniqueTestName, e);
         }
     }
 
     @Override
     public void testFinished(TestOutcome result) {
-        logger.info("Test finished: {}", result);
-        // 更新当前测试结果
-        if (result != null && result.getResult() != null) {
-            currentTestResult.set(result.getResult());
+        try {
+            logger.info("Test finished: {}", result);
+            // 更新当前测试结果
+            if (result != null && result.getResult() != null) {
+                currentTestResult.set(result.getResult());
+            }
+            testFinishedInternal();
+
+            // 自动断言API监控结果
+            autoAssertApiMonitoringIfNeeded();
+
+            // 获取浏览器重启策略
+            String restartBrowserForEach = SystemEnvironmentVariables.currentEnvironmentVariables()
+                    .getProperty("serenity.restart.browser.for.each", "scenario");
+
+            // 根据浏览器重启策略决定清理方式
+            if ("scenario".equalsIgnoreCase(restartBrowserForEach)) {
+                // Scenario 模式：测试结束后立即清理所有资源（Context/Page/Browser）
+                logger.info("Cleaning up Playwright resources (scenario-level restart)");
+                PlaywrightManager.cleanupForScenario();
+            } else {
+                // Feature 模式：只清理页面状态，保留 Context/Page 供复用
+                logger.debug("Feature mode - cleaning page state while keeping Context/Page");
+                PlaywrightManager.cleanupPageState();
+            }
+
+            // 检查是否需要重试失败的测试
+            checkAndTriggerRerun();
+        } catch (Exception e) {
+            logger.error("Error in testFinished, forcing cleanup", e);
+            // 确保异常时也清理
+            cleanupThreadLocals();
+            throw e;
         }
-        testFinishedInternal();
-
-        // 自动断言API监控结果
-        autoAssertApiMonitoringIfNeeded();
-
-        // 获取浏览器重启策略
-        String restartBrowserForEach = SystemEnvironmentVariables.currentEnvironmentVariables()
-                .getProperty("serenity.restart.browser.for.each", "scenario");
-
-        // 根据浏览器重启策略决定清理方式
-        if ("scenario".equalsIgnoreCase(restartBrowserForEach)) {
-            // Scenario 模式：测试结束后立即清理所有资源（Context/Page/Browser）
-            logger.info("Cleaning up Playwright resources (scenario-level restart)");
-            PlaywrightManager.cleanupForScenario();
-        } else {
-            // Feature 模式：只清理页面状态，保留 Context/Page 供复用
-            logger.debug("Feature mode - cleaning page state while keeping Context/Page");
-            PlaywrightManager.cleanupPageState();
-        }
-
-        // 检查是否需要重试失败的测试
-        checkAndTriggerRerun();
     }
 
     @Override

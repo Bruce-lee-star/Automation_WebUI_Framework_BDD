@@ -1114,6 +1114,8 @@ public class ApiMonitorAndMockManager {
         /**
          * 设置要Mock的URL模式（支持 glob 模式）
          * 
+         * 每次调用 forUrl() 都会创建一个新的 Mock 规则，支持链式创建多个规则
+         * 
          * @param urlPattern URL 模式
          * @return this构建器实例
          */
@@ -1121,15 +1123,10 @@ public class ApiMonitorAndMockManager {
             // 转换为 glob 模式
             String globPattern = toGlobPattern(urlPattern);
             
-            if (mockRules.isEmpty()) {
-                // 如果是第一个规则，创建新规则
-                MockRule rule = new MockRule("mock-" + urlPattern, globPattern);
-                mockRules.add(rule);
-            } else {
-                // 如果已有规则，更新最后一个规则的 urlPattern
-                MockRule lastRule = mockRules.get(mockRules.size() - 1);
-                lastRule.urlPattern(globPattern);
-            }
+            // 每次调用都创建新规则（支持链式创建多个规则）
+            MockRule rule = new MockRule("mock-" + urlPattern, globPattern);
+            mockRules.add(rule);
+            
             return this;
         }
 
