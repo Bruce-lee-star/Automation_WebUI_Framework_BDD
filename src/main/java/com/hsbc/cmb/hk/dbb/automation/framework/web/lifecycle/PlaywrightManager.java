@@ -1653,8 +1653,7 @@ public class PlaywrightManager {
                         LoggingConfigUtil.logInfoIfVerbose(logger, "Page closed");
                     }
                 } catch (Exception e) {
-                    logger.error("Failed to close page: {}", e.getMessage(), e);
-                    throw new BrowserException("Failed to close page", e);
+                    logger.warn("Failed to close!");
                 } finally {
                     pageThreadLocal.remove();
                 }

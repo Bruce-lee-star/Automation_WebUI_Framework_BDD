@@ -1026,6 +1026,22 @@ public abstract class BasePage {
         try {
             LoggingConfigUtil.logInfoIfVerbose(logger, "Refreshing page");
             ensurePageValid();
+            // 使用 domcontentloaded 而不是 load，避免因持续的网络请求（如SSE、长轮询）导致阻塞
+            page.reload(new Page.ReloadOptions().setWaitUntil(com.microsoft.playwright.options.WaitUntilState.DOMCONTENTLOADED));
+        } catch (Exception e) {
+            LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to refresh page", e);
+            throw new RuntimeException("Failed to refresh page", e);
+        }
+    }
+    
+    /**
+     * 刷新页面（等待 load 事件）
+     * 注意：如果页面有持续的网络请求，可能会阻塞
+     */
+    public void refreshAndWaitForLoad() {
+        try {
+            LoggingConfigUtil.logInfoIfVerbose(logger, "Refreshing page (waiting for load)");
+            ensurePageValid();
             page.reload();
         } catch (Exception e) {
             LoggingConfigUtil.logErrorIfVerbose(logger, "Failed to refresh page", e);

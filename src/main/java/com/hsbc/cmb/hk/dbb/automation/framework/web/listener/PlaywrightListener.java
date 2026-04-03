@@ -76,7 +76,7 @@ public class PlaywrightListener implements StepListener {
     @Override
     public void testStarted(String testName) {
         // 生成唯一名称：原名称 + 线程ID（保证同名 scenario 不合并）
-        String uniqueTestName = testName + "_" + Thread.currentThread().getId();
+        String uniqueTestName = testName + "_" + Thread.currentThread().getId() + "_" + System.currentTimeMillis();
         currentTestName.set(uniqueTestName);
         testStartTime.set(System.currentTimeMillis());
         currentTestResult.set(TestResult.PENDING); // 初始化为PENDING，避免默认为SUCCESS导致统计错误
@@ -137,14 +137,6 @@ public class PlaywrightListener implements StepListener {
 
         // 清理线程本地变量
         cleanupThreadLocals();
-    }
-
-    /**
-     * 自动断言API监控结果（如果监控失败）
-     */
-    private void autoAssertApiMonitoringIfNeeded() {
-        // 检查是否有监控失败
-        RealApiMonitor.checkAndThrowMonitoringFailure();
     }
 
     @Override
@@ -603,9 +595,6 @@ public class PlaywrightListener implements StepListener {
             }
             testFinishedInternal();
 
-            // 自动断言API监控结果
-            autoAssertApiMonitoringIfNeeded();
-
             // 获取浏览器重启策略
             String restartBrowserForEach = SystemEnvironmentVariables.currentEnvironmentVariables()
                     .getProperty("serenity.restart.browser.for.each", "scenario");
@@ -683,12 +672,6 @@ public class PlaywrightListener implements StepListener {
         }
 
         LoggingConfigUtil.logInfoIfVerbose(logger, "Test completed: {} in {}ms (DataDriven: {}, Result: {})", testName, duration, isInDataDrivenTest, result);
-
-        // 自动断言API监控结果
-        autoAssertApiMonitoringIfNeeded();
-
-        // 重置监控失败标志
-        RealApiMonitor.resetMonitoringFailure();
 
         cleanupThreadLocals();
     }

@@ -1,5 +1,6 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.listener;
 
+import com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring.RealApiMonitor;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
 import net.thucydides.model.steps.StepListener;
 import net.thucydides.model.steps.StepFailure;
@@ -383,6 +384,14 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
         if (instanceId == 1) {
             LoggingConfigUtil.logDebugIfVerbose(logger, "Test finished with result: {}", result);
         }
+        
+        // 自动记录 API 监控结果到 Serenity 报告
+        try {
+            RealApiMonitor.logResults();
+        } catch (Exception e) {
+            logger.debug("Failed to record API monitor results: {}", e.getMessage());
+        }
+        
         for (StepListener listener : delegateListeners) {
             try {
                 listener.testFinished(result);
@@ -403,6 +412,13 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
         // 只在首次实例记录INFO日志
         if (instanceId == 1) {
             LoggingConfigUtil.logDebugIfVerbose(logger, "Test finished with result: {}, isDataDriven: {}, finishTime: {}", result, isInDataDrivenTest, finishTime);
+        }
+
+        // 自动记录 API 监控结果到 Serenity 报告
+        try {
+            RealApiMonitor.logResults();
+        } catch (Exception e) {
+            logger.debug("Failed to record API monitor results: {}", e.getMessage());
         }
 
         for (StepListener listener : delegateListeners) {
