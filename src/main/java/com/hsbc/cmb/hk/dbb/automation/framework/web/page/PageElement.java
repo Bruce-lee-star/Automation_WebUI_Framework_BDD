@@ -1,6 +1,7 @@
 package com.hsbc.cmb.hk.dbb.automation.framework.web.page;
 
 import com.hsbc.cmb.hk.dbb.automation.framework.web.page.base.BasePage;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.TimeoutConfig;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.options.BoundingBox;
 import com.microsoft.playwright.options.WaitForSelectorState;
@@ -144,52 +145,311 @@ public class PageElement {
     }
 
     /**
-     * 检查元素是否可见
+     * 检查元素是否可见（带等待重试）
+     * 会等待配置的超时时间，直到元素可见或超时
      */
     public boolean isVisible() {
-        return locator().isVisible();
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isVisible()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**
-     * 检查元素是否存在
+     * 检查元素是否可见（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     */
+    public boolean isVisible(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isVisible()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否存在（带等待重试）
+     * 会等待配置的超时时间，直到元素存在或超时
      */
     public boolean exists() {
-        return locator().count() > 0;
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().count() > 0) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**
-     * 检查元素是否可点击
+     * 检查元素是否存在（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     */
+    public boolean exists(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().count() > 0) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否可点击（带等待重试）
+     * 会等待配置的超时时间，直到元素可点击或超时
      */
     public boolean isClickable() {
-        return locator().isEnabled();
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isEnabled() && locator().isVisible()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**
-     * 检查元素是否启用
+     * 检查元素是否可点击（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     */
+    public boolean isClickable(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isEnabled() && locator().isVisible()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否启用（带等待重试）
+     * 会等待配置的超时时间，直到元素启用或超时
      */
     public boolean isEnabled() {
-        return locator().isEnabled();
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isEnabled()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**
-     * 检查元素是否被选中
+     * 检查元素是否启用（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     */
+    public boolean isEnabled(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isEnabled()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否被选中（带等待重试）
+     * 会等待配置的超时时间，直到元素被选中或超时
      */
     public boolean isSelected() {
-        return locator().isChecked();
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isChecked()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**
-     * 检查元素是否禁用
+     * 检查元素是否被选中（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     */
+    public boolean isSelected(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isChecked()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否禁用（带等待重试）
+     * 会等待配置的超时时间，直到元素禁用或超时
      */
     public boolean isDisabled() {
-        return locator().isDisabled();
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isDisabled()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**
-     * 检查元素是否可编辑
+     * 检查元素是否禁用（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     */
+    public boolean isDisabled(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isDisabled()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否可编辑（带等待重试）
+     * 会等待配置的超时时间，直到元素可编辑或超时
      */
     public boolean isEditable() {
-        return isEnabled() && !isDisabled();
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isEnabled() && !locator().isDisabled()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否可编辑（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     */
+    public boolean isEditable(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isEnabled() && !locator().isDisabled()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**
@@ -680,11 +940,49 @@ public class PageElement {
     }
 
     /**
-     * 检查元素是否隐藏
+     * 检查元素是否隐藏（带等待重试）
+     * 会等待配置的超时时间，直到元素隐藏或超时
      * @return 如果元素隐藏则返回true，否则返回false
      */
     public boolean isHidden() {
-        return locator().isHidden();
+        int timeout = TimeoutConfig.getElementCheckTimeout();
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isHidden()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
+    }
+
+    /**
+     * 检查元素是否隐藏（指定超时时间）
+     * @param timeoutInSeconds 超时时间（秒）
+     * @return 如果元素隐藏则返回true，否则返回false
+     */
+    public boolean isHidden(int timeoutInSeconds) {
+        int timeout = timeoutInSeconds * 1000;
+        int interval = TimeoutConfig.getPollingInterval();
+        long endTime = System.currentTimeMillis() + timeout;
+
+        while (System.currentTimeMillis() < endTime) {
+            try {
+                if (locator().isHidden()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略异常，继续重试
+            }
+            getPage().waitForTimeout(interval);
+        }
+        return false;
     }
 
     /**

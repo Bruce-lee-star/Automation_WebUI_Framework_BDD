@@ -174,6 +174,11 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
         }
     }
 
+    @Override
+    public void testStarted(String description, ZonedDateTime startTime) {
+        StepListener.super.testStarted(description, startTime);
+    }
+
     // 内部实现方法，不直接作为接口方法
     private void testFinishedInternal() {
         LoggingConfigUtil.logDebugIfVerbose(logger, "🏁 Thucydides Adapter: Test finished");
@@ -202,6 +207,11 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
     }
 
     @Override
+    public void testAborted() {
+        StepListener.super.testAborted();
+    }
+
+    @Override
     public void stepStarted(ExecutedStepDescription step) {
         if (step == null) return;
 
@@ -215,6 +225,11 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
                 logger.warn("Error in delegate listener stepStarted: {}", listener.getClass().getSimpleName(), e);
             }
         }
+    }
+
+    @Override
+    public void stepStarted(ExecutedStepDescription description, ZonedDateTime startTime) {
+        StepListener.super.stepStarted(description, startTime);
     }
 
     @Override
@@ -245,6 +260,11 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
                 logger.warn("Error in delegate listener stepFailed: {}", listener.getClass().getSimpleName(), e);
             }
         }
+    }
+
+    @Override
+    public void stepFailed(StepFailure failure, List<ScreenshotAndHtmlSource> screenshotList, boolean isInDataDrivenTest) {
+        StepListener.super.stepFailed(failure, screenshotList, isInDataDrivenTest);
     }
 
     @Override
@@ -337,6 +357,11 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
     }
 
     @Override
+    public void testSuiteStarted(Class<?> testClass, String testCaseName) {
+        StepListener.super.testSuiteStarted(testClass, testCaseName);
+    }
+
+    @Override
     public void testSuiteFinished() {
         LoggingConfigUtil.logDebugIfVerbose(logger, "Test suite finished");
         for (StepListener listener : delegateListeners) {
@@ -358,6 +383,11 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
                 logger.warn("Error in delegate listener testStarted: {}", listener.getClass().getSimpleName(), e);
             }
         }
+    }
+
+    @Override
+    public void testStarted(String testName, String testMethod, String id, String scenarioId) {
+        StepListener.super.testStarted(testName, testMethod, id, scenarioId);
     }
 
     @Override
@@ -399,6 +429,11 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
                 logger.warn("Error in delegate listener testFinished: {}", listener.getClass().getSimpleName(), e);
             }
         }
+    }
+
+    @Override
+    public void testFinished(TestOutcome result, boolean isInDataDrivenTest) {
+        StepListener.super.testFinished(result, isInDataDrivenTest);
     }
 
     @Override
@@ -622,6 +657,21 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
     }
 
     @Override
+    public void exampleStarted(Map<String, String> data, ZonedDateTime time) {
+        StepListener.super.exampleStarted(data, time);
+    }
+
+    @Override
+    public void exampleStarted(Map<String, String> data, String exampleName) {
+        StepListener.super.exampleStarted(data, exampleName);
+    }
+
+    @Override
+    public void exampleStarted(Map<String, String> data, String exampleName, ZonedDateTime time) {
+        StepListener.super.exampleStarted(data, exampleName, time);
+    }
+
+    @Override
     public void exampleFinished() {
         logger.debug("Example finished");
         for (StepListener listener : delegateListeners) {
@@ -686,5 +736,10 @@ public class ThucydidesStepsListenerAdapter implements StepListener {
                 logger.warn("Error in delegate listener takeScreenshots: {}", listener.getClass().getSimpleName(), e);
             }
         }
+    }
+
+    @Override
+    public void recordScreenshot(String s, byte[] bytes) {
+
     }
 }

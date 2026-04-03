@@ -2,23 +2,22 @@ package com.hsbc.cmb.hk.dbb.automation.framework.web.listener;
 
 import com.hsbc.cmb.hk.dbb.automation.framework.web.core.FrameworkCore;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.lifecycle.PlaywrightManager;
-import com.hsbc.cmb.hk.dbb.automation.framework.web.monitoring.RealApiMonitor;
+import com.hsbc.cmb.hk.dbb.automation.framework.web.screenshot.strategy.ScreenshotStrategy;
 import com.hsbc.cmb.hk.dbb.automation.framework.web.utils.LoggingConfigUtil;
 import com.hsbc.cmb.hk.dbb.automation.retry.configuration.RerunConfiguration;
 import com.hsbc.cmb.hk.dbb.automation.retry.executor.RerunProcessExecutor;
 import com.hsbc.cmb.hk.dbb.automation.retry.listener.PlaywrightRetryListener;
-import com.hsbc.cmb.hk.dbb.automation.framework.web.screenshot.strategy.ScreenshotStrategy;
-import net.thucydides.model.steps.StepListener;
-import net.thucydides.model.steps.StepFailure;
-import net.thucydides.model.steps.ExecutedStepDescription;
+import net.thucydides.core.steps.StepEventBus;
 import net.thucydides.model.domain.DataTable;
 import net.thucydides.model.domain.Story;
 import net.thucydides.model.domain.TestOutcome;
 import net.thucydides.model.domain.TestResult;
-import net.thucydides.model.screenshots.ScreenshotAndHtmlSource;
-import net.thucydides.model.util.EnvironmentVariables;
 import net.thucydides.model.environment.SystemEnvironmentVariables;
-import net.thucydides.core.steps.StepEventBus;
+import net.thucydides.model.screenshots.ScreenshotAndHtmlSource;
+import net.thucydides.model.steps.ExecutedStepDescription;
+import net.thucydides.model.steps.StepFailure;
+import net.thucydides.model.steps.StepListener;
+import net.thucydides.model.util.EnvironmentVariables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -370,11 +369,12 @@ public class PlaywrightListener implements StepListener {
             LoggingConfigUtil.logDebugIfVerbose(
                     logger, "Test data recorded: {} = {}", key, value);
         } else {
+            // 在测试生命周期之外调用时，静默跳过（DEBUG级别日志）
             if (testName == null) {
-                logger.warn("Cannot record test data: testName is null");
+                logger.debug("Skip recording test data: testName is null (key={})", key);
             }
             if (key == null) {
-                logger.warn("Cannot record test data: key is null");
+                logger.debug("Skip recording test data: key is null");
             }
         }
     }
@@ -511,6 +511,11 @@ public class PlaywrightListener implements StepListener {
             LoggingConfigUtil.logDebugIfVerbose(logger, "Added {} screenshots from currentStepScreenshots to takeScreenshots list (result: {})",
                     stepScreenshots.size(), result);
         }
+    }
+
+    @Override
+    public void recordScreenshot(String s, byte[] bytes) {
+
     }
 
     @Override

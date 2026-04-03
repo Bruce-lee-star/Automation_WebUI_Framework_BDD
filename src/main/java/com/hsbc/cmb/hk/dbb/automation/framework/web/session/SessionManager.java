@@ -163,6 +163,113 @@ public class SessionManager {
     }
 
     /**
+     * 【新】清除指定的 Session
+     * <p>
+     * 此方法用于清除指定用户的 session，包括：
+     * 1. 删除 session storageState 文件
+     * 2. 删除 session 元数据文件
+     * <p>
+     * 使用场景：
+     * - 用户登出时清除 session
+     * - 需要强制重新登录时清除 session
+     * - 测试清理时清除 session
+     * <p>
+     * 使用示例：
+     * <pre>
+     * // 登出时清除 session
+     * SessionManager.clearSession("O63_SIT1_WP7UAT2_2");
+     * </pre>
+     *
+     * @param sessionKey Session 标识（如 "O63_SIT1_WP7UAT2_2"）
+     * @return true 表示清除成功，false 表示 session 不存在或清除失败
+     */
+    public static boolean clearSession(String sessionKey) {
+        try {
+            Path sessionPath = getSessionPath(sessionKey);
+            Path metaPath = getMetaPath(sessionKey);
+            
+            boolean sessionDeleted = false;
+            boolean metaDeleted = false;
+            
+            // 删除 session 文件
+            if (Files.exists(sessionPath)) {
+                Files.delete(sessionPath);
+                sessionDeleted = true;
+                LoggingConfigUtil.logInfoIfVerbose(logger, 
+                    "Session file deleted: {}", sessionPath);
+            }
+            
+            // 删除 meta 文件
+            if (Files.exists(metaPath)) {
+                Files.delete(metaPath);
+                metaDeleted = true;
+                LoggingConfigUtil.logInfoIfVerbose(logger, 
+                    "Meta file deleted: {}", metaPath);
+            }
+            
+            // 只要有一个文件被删除就返回 true
+            boolean cleared = sessionDeleted || metaDeleted;
+            
+            if (cleared) {
+                logger.info("Session cleared successfully: {}", sessionKey);
+            } else {
+                LoggingConfigUtil.logInfoIfVerbose(logger, 
+                    "No session found to clear: {}", sessionKey);
+            }
+            
+            return cleared;
+        } catch (Exception e) {
+            logger.error("Failed to clear session for: {}", sessionKey, e);
+            return false;
+        }
+    }
+
+    /**
+     * 【新】清除所有 Session
+     * <p>
+     * 此方法用于清除所有用户的 session，适用于：
+     * - 测试环境清理
+     * - 批量登出
+     * <p>
+     * 使用示例：
+     * <pre>
+     * // 清理所有 session
+     * int count = SessionManager.clearAllSessions();
+     * System.out.println("Cleared " + count + " sessions");
+     * </pre>
+     *
+     * @return 清除的 session 数量
+     */
+    public static int clearAllSessions() {
+        try {
+            Path sessionDir = Paths.get(SESSION_DIR);
+            if (!Files.exists(sessionDir)) {
+                return 0;
+            }
+            
+            int count = 0;
+            try (var stream = Files.list(sessionDir)) {
+                count = (int) stream
+                    .filter(path -> path.toString().endsWith(".json") || path.toString().endsWith(".meta"))
+                    .peek(path -> {
+                        try {
+                            Files.delete(path);
+                        } catch (Exception e) {
+                            logger.warn("Failed to delete: {}", path, e);
+                        }
+                    })
+                    .count();
+            }
+            
+            logger.info("Cleared {} session files", count);
+            return count / 2; // 每个 session 有 .json 和 .meta 两个文件
+        } catch (Exception e) {
+            logger.error("Failed to clear all sessions", e);
+            return 0;
+        }
+    }
+
+    /**
      * 【新】加载 HomeUrl
      * <p>
      * 从 meta 文件加载 homeUrl

@@ -325,4 +325,9 @@ public class AxeCoreListener implements StepListener {
     public void takeScreenshots(TestResult testResult, List<ScreenshotAndHtmlSource> list) {
 
     }
+
+    @Override
+    public void recordScreenshot(String s, byte[] bytes) {
+
+    }
 }
